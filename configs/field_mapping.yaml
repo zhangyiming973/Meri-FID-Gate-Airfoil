@@ -1,0 +1,17 @@
+columns:
+  id: id
+  row_id: row_id
+  pdf_path: pdf_path
+  angle_web_deg: angle_web_deg
+  r_bore2_mm: hub_r_end_mm
+  r_outer2_mm: rim_r_start_mm
+  r_trans_bore_web_mm: r_trans_bore_web_mm
+  z_min: z_min
+  r_bore_mm: r_bore_mm
+  r_outer_mm: r_outer_mm
+  z_bore_mm: z_bore_mm
+  z_rim_mm: z_rim_mm
+  disk_type: disk_type
+  material_id: material_id
+  speed_rpm: speed_rpm
+  temperature_c: temperature_c

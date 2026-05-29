@@ -1,0 +1,54 @@
+dataset_name: single
+data_root: data/single/processed
+index_path: data/single/processed/meridian_index.csv
+param_table_path: data/raw/param_table.csv
+npz_dir: data/single/processed/meridian_samples
+
+split:
+  test_size: 10
+  seed: 42
+
+condition_columns:
+  - hub_r_end_mm
+  - rim_r_start_mm
+  - angle_web_deg
+  - r_trans_bore_web_mm
+  - z_min
+
+autoencoder:
+  in_channels: 2          # sdf2d_norm + semantic_mask
+  latent_channels: 64
+  latent_spatial: 16
+  epochs: 80
+  batch_size: 8
+  lr: 0.0003
+  use_semantic: true
+  loss_weights:
+    l1: 1.0
+    l2: 0.5
+    zero_level: 2.0
+    zero_sigma_mm: 1.5
+    dimension: 0.3
+    semantic: 0.2
+
+latent_gate:
+  max_recon_l1: 0.08
+  min_latent_std: 0.05
+  min_pass_ratio: 0.85
+
+diffusion:
+  timesteps: 200
+  epochs: 120
+  batch_size: 8
+  lr: 0.0002
+  cfg_dropout: 0.15
+  cfg_scale: 3.0
+  sample_steps: 50
+
+physics_guidance:
+  enabled: true
+  weight: 0.05
+  sigma_vm_limit: 103000.0
+
+device: cuda
+num_workers: 2
