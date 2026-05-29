@@ -1,0 +1,45 @@
+{
+  "dataset": "F404",
+  "autoencoder": {
+    "in_channels": 2,
+    "latent_channels": 64,
+    "latent_spatial": 16,
+    "epochs": 80,
+    "batch_size": 8,
+    "lr": 0.0003,
+    "use_semantic": true,
+    "loss_weights": {
+      "l1": 1.0,
+      "l2": 0.5,
+      "zero_level": 2.0,
+      "zero_sigma_mm": 1.5,
+      "dimension": 0.3,
+      "semantic": 0.2
+    }
+  },
+  "latent_gate": {
+    "max_recon_l1": 0.08,
+    "min_latent_std": 0.05,
+    "min_pass_ratio": 0.85
+  },
+  "diffusion": {
+    "denoiser": "mlp",
+    "pca_dim": 128,
+    "mlp_hidden": 512,
+    "timesteps": 200,
+    "epochs": 200,
+    "batch_size": 16,
+    "lr": 0.0005,
+    "cfg_dropout": 0.2,
+    "cfg_scale": 1.5,
+    "sample_steps": 50,
+    "use_ddim": true
+  },
+  "physics_guidance": {
+    "enabled": false,
+    "weight": 0.02,
+    "sigma_vm_limit": 103000.0
+  },
+  "device": "cuda",
+  "num_workers": 0
+}

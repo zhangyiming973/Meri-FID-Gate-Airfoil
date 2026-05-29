@@ -1,3 +1,8 @@
+"""扩散模型核心：调度器与潜空间 UNet 去噪器。
+
+包含 DDPM 前向加噪 q_sample、DDIM/DDPM 带 CFG 的采样，
+以及直接在 AE 潜特征图上工作的 LatentDiffusionUNet（遗留路径）。
+"""
 from __future__ import annotations
 
 import json
@@ -14,6 +19,8 @@ import torch.nn.functional as F
 
 @dataclass
 class LatentStats:
+    """潜变量全局均值/标准差，用于无 PCA 路径的归一化。"""
+
     mean: float
     std: float
 
@@ -36,17 +43,21 @@ class LatentStats:
 
 
 def save_latent_stats(stats: LatentStats, path: Path) -> None:
+    """保存潜变量统计量到 JSON。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(stats.to_dict(), f, indent=2)
 
 
 def load_latent_stats(path: Path) -> LatentStats:
+    """从 JSON 加载潜变量统计量。"""
     with open(path, encoding="utf-8") as f:
         return LatentStats.from_dict(json.load(f))
 
 
 class SinusoidalPosEmb(nn.Module):
+    """正弦时间步位置编码。"""
+
     def __init__(self, dim: int) -> None:
         super().__init__()
         self.dim = dim
@@ -59,6 +70,8 @@ class SinusoidalPosEmb(nn.Module):
 
 
 class ResBlock(nn.Module):
+    """带嵌入调制的残差卷积块。"""
+
     def __init__(self, ch: int, emb_dim: int) -> None:
         super().__init__()
         self.n1 = nn.GroupNorm(8, ch)
@@ -75,7 +88,10 @@ class ResBlock(nn.Module):
 
 
 class LatentDiffusionUNet(nn.Module):
-    """Condition is broadcast spatially and concatenated to noisy latent."""
+    """直接在 AE 潜特征图 (C×H×W) 上工作的轻量 UNet 去噪器（遗留路径）。
+
+    工况在空间维度广播拼接；无下采样 skip，结构较浅。
+    """
 
     def __init__(self, latent_channels: int = 64, cond_dim: int = 5, time_dim: int = 128, base_ch: int = 128) -> None:
         super().__init__()
@@ -132,32 +148,50 @@ class LatentDiffusionUNet(nn.Module):
 
 
 class DiffusionSchedule:
+    """DDPM 噪声调度与采样器。
+
+    管理 beta/alpha/alpha_bar 序列，提供前向加噪、x0 预测、
+    DDPM/DDIM 带 Classifier-Free Guidance 的逆向采样。
+
+    Args:
+        timesteps: 扩散总步数 T。
+        device: 预先将调度张量移至的设备。
+    """
+
     def __init__(self, timesteps: int = 200, device: torch.device | None = None) -> None:
         self.timesteps = timesteps
         betas = torch.linspace(1e-4, 0.02, timesteps)
         alphas = 1.0 - betas
         self.betas = betas
         self.alphas = alphas
-        self.alpha_bar = torch.cumprod(alphas, dim=0)
+        self.alpha_bar = torch.cumprod(alphas, dim=0)  # 累积 alpha 乘积
         if device:
             self.to(device)
 
     def to(self, device: torch.device) -> DiffusionSchedule:
+        """将调度张量移至指定设备。"""
         self.betas = self.betas.to(device)
         self.alphas = self.alphas.to(device)
         self.alpha_bar = self.alpha_bar.to(device)
         return self
 
     def _ab_broadcast(self, ab: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """将 (B,) 的 alpha_bar 广播到与 x 相同的维度。"""
         return ab.view(-1, *([1] * (x.ndim - 1)))
 
     def q_sample(self, x0: torch.Tensor, t: torch.Tensor, noise: torch.Tensor | None = None):
+        """前向扩散：x_t = sqrt(ab_t)*x0 + sqrt(1-ab_t)*noise。
+
+        Returns:
+            (x_t, noise) 元组。
+        """
         if noise is None:
             noise = torch.randn_like(x0)
         ab = self._ab_broadcast(self.alpha_bar[t], x0)
         return torch.sqrt(ab) * x0 + torch.sqrt(1 - ab) * noise, noise
 
     def predict_x0(self, xt: torch.Tensor, t: torch.Tensor, eps: torch.Tensor) -> torch.Tensor:
+        """从 x_t 和预测噪声反推 x0。"""
         ab = self._ab_broadcast(self.alpha_bar[t], xt)
         return (xt - torch.sqrt(1 - ab) * eps) / torch.sqrt(ab).clamp(min=1e-6)
 
@@ -170,10 +204,11 @@ class DiffusionSchedule:
         condition: torch.Tensor,
         cfg_scale: float,
     ) -> torch.Tensor:
+        """单步 DDPM 采样，带 Classifier-Free Guidance。"""
         tt = torch.full((xt.shape[0],), t, device=xt.device, dtype=torch.long)
         eps_c = model(xt, tt, condition)
         eps_u = model(xt, tt, condition, cond_mask=torch.zeros(xt.shape[0], device=xt.device))
-        eps = eps_u + cfg_scale * (eps_c - eps_u)
+        eps = eps_u + cfg_scale * (eps_c - eps_u)  # CFG 插值
         beta, alpha, ab = self.betas[t], self.alphas[t], self.alpha_bar[t]
         mean = (1 / torch.sqrt(alpha)) * (xt - (beta / torch.sqrt(1 - ab)) * eps)
         if t > 0:
@@ -190,6 +225,10 @@ class DiffusionSchedule:
         steps: int = 50,
         eta: float = 0.0,
     ) -> torch.Tensor:
+        """DDIM 加速采样（默认 50 步），带 CFG。
+
+        eta=0 时为确定性 DDIM；eta>0 引入随机性。
+        """
         device = condition.device
         xt = torch.randn(shape, device=device)
         times = torch.linspace(self.timesteps - 1, 0, steps, device=device).long()
@@ -224,6 +263,7 @@ class DiffusionSchedule:
         steps: int | None = None,
         use_ddim: bool = True,
     ) -> torch.Tensor:
+        """统一采样入口：默认 DDIM，否则逐步 DDPM。"""
         if use_ddim:
             return self.ddim_sample_cfg(model, shape, condition, cfg_scale, steps or 50)
         xt = torch.randn(shape, device=condition.device)

@@ -1,3 +1,8 @@
+"""训练与评估可视化工具。
+
+提供 SDF 对比面板、训练曲线、样本网格、潜变量 PCA、门控报告等绘图函数，
+以及 JSON 保存与 Tensor→NumPy 转换辅助。
+"""
 from __future__ import annotations
 
 import json
@@ -16,6 +21,15 @@ def plot_sdf_panel(
     save_path: Path,
     condition: dict[str, float] | None = None,
 ) -> None:
+    """绘制单样本 SDF 三联图：GT | 预测 | 绝对误差热力图。
+
+    Args:
+        gt: 真值 SDF 二维数组。
+        pred: 重建/生成 SDF。
+        title: 图标题。
+        save_path: 输出 PNG 路径。
+        condition: 可选工况字典，显示在副标题。
+    """
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
     vmax = max(np.abs(gt).max(), np.abs(pred).max(), 1e-6)
     for ax, arr, lbl in zip(axes[:2], [gt, pred], ["GT SDF", "Recon / Gen SDF"]):
@@ -40,6 +54,7 @@ def plot_sdf_panel(
 
 
 def plot_training_curves(history: dict[str, list[float]], save_path: Path, title: str) -> None:
+    """绘制训练/验证损失曲线（单图多线）。"""
     fig, ax = plt.subplots(figsize=(8, 5))
     for k, v in history.items():
         if v:
@@ -56,7 +71,7 @@ def plot_training_curves(history: dict[str, list[float]], save_path: Path, title
 
 
 def plot_training_dashboard(history: dict[str, list[float]], save_path: Path, title: str) -> None:
-    """Multi-panel training loss dashboard."""
+    """多子图训练仪表盘，每个指标独立面板并标注最终值。"""
     keys = [k for k, v in history.items() if v]
     n = len(keys)
     if n == 0:
@@ -89,7 +104,12 @@ def plot_sample_grid(
     title: str,
     max_samples: int = 10,
 ) -> None:
-    """Grid: each row = [GT | Pred | Error] for one sample."""
+    """多样本网格：每行 [GT | Pred | Error] 三联图。
+
+    Args:
+        items: 含 gt、pred、sample_id 的字典列表。
+        max_samples: 最多展示行数。
+    """
     items = items[:max_samples]
     n = len(items)
     if n == 0:
@@ -131,6 +151,7 @@ def plot_per_sample_metrics(
     title: str,
     value_key: str = "l1",
 ) -> None:
+    """逐样本指标柱状图，高于均值的样本标红。"""
     if not metrics:
         return
     ids = [m["sample_id"] for m in metrics]
@@ -151,6 +172,7 @@ def plot_per_sample_metrics(
 
 
 def plot_gate_report(report: dict[str, Any], save_path: Path) -> None:
+    """潜变量门控报告：通过/失败计数 + 重建 L1 分布直方图。"""
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     axes[0].bar(["passed", "failed"], [report["passed_count"], report["failed_count"]],
                 color=["#2ecc71", "#e74c3c"])
@@ -169,6 +191,7 @@ def plot_gate_report(report: dict[str, Any], save_path: Path) -> None:
 
 
 def plot_latent_pca(latents: np.ndarray, save_path: Path, labels: list[str] | None = None) -> None:
+    """潜变量 PCA 二维散点图（SVD 前两主成分）。"""
     if latents.shape[0] < 3:
         return
     x = latents - latents.mean(axis=0, keepdims=True)
@@ -194,6 +217,7 @@ def plot_train_test_metric_compare(
     save_path: Path,
     title: str = "Train vs Test Recon L1",
 ) -> None:
+    """训练集 vs 测试集重建 L1 箱线图对比。"""
     fig, ax = plt.subplots(figsize=(7, 4))
     bp = ax.boxplot([train_vals, test_vals], labels=["train", "test"], patch_artist=True)
     bp["boxes"][0].set_facecolor("#3498db")
@@ -208,10 +232,12 @@ def plot_train_test_metric_compare(
 
 
 def save_json(data: dict[str, Any], path: Path) -> None:
+    """将字典保存为 UTF-8 JSON 文件。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
 def to_numpy(x: torch.Tensor) -> np.ndarray:
+    """将 Tensor  detach 并移至 CPU 转为 NumPy 数组。"""
     return x.detach().cpu().numpy()

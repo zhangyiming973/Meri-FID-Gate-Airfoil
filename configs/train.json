@@ -1,10 +1,11 @@
 {
-  "dataset_name": "single",
-  "data_root": "data/single/processed",
-  "index_path": "data/single/processed/meridian_index.csv",
+  "dataset_name": "F404",
+  "data_root": "data/F404/processed",
+  "index_path": "data/F404/processed/meridian_index.csv",
   "param_table_path": "data/raw/param_table.csv",
-  "npz_dir": "data/single/processed/meridian_samples",
-  "split": {"test_size": 10, "seed": 42},
+  "npz_dir": "data/F404/processed/meridian_samples",
+  "condition_specs_path": "data/F404/processed/condition_specs.jsonl",
+  "split": {"test_size": 10, "seed": 42, "filter_passed_quality": false},
   "condition_columns": [
     "hub_r_end_mm",
     "rim_r_start_mm",

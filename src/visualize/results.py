@@ -1,4 +1,8 @@
-"""Generate comprehensive training & test visualizations from saved runs."""
+"""从已保存的训练 run 重新生成综合可视化。
+
+支持自编码器 run 与 MLP/UNet 扩散 run 的离线可视化，
+无需重新训练即可产出训练曲线、重建/生成对比图等。
+"""
 from __future__ import annotations
 
 import argparse
@@ -36,6 +40,10 @@ from src.utils.visualization import (
 
 @torch.no_grad()
 def visualize_ae_run(ae_run_dir: Path, cfg: dict[str, Any]) -> None:
+    """为自编码器训练 run 生成完整可视化套件。
+
+    包括：训练仪表盘、门控报告、潜变量 PCA、train/test 重建对比。
+    """
     root = project_root()
     device = torch.device("cuda" if torch.cuda.is_available() and cfg.get("device") == "cuda" else "cpu")
     vis_root = ae_run_dir / "visualizations"
@@ -114,6 +122,10 @@ def visualize_ae_run(ae_run_dir: Path, cfg: dict[str, Any]) -> None:
 
 @torch.no_grad()
 def visualize_diff_run(diff_run_dir: Path, ae_run_dir: Path, cfg: dict[str, Any]) -> None:
+    """为扩散训练 run 生成测试集生成可视化。
+
+    自动识别 denoiser 模式（mlp / pca_unet / 遗留 raw UNet）并加载对应模型。
+    """
     device = torch.device("cuda" if torch.cuda.is_available() and cfg.get("device") == "cuda" else "cpu")
     vis_root = diff_run_dir / "visualizations"
     vis_root.mkdir(exist_ok=True)
@@ -136,6 +148,7 @@ def visualize_diff_run(diff_run_dir: Path, ae_run_dir: Path, cfg: dict[str, Any]
     codec = None
     z_shape = (1, ae_cfg["latent_channels"], ae_cfg["latent_spatial"], ae_cfg["latent_spatial"])
 
+    # 按 checkpoint 中记录的 mode 构建去噪器与编解码器
     if mode == "pca_unet" and pca is not None:
         codec = DiffusionLatentCodec.from_mode("pca_unet", pca, z_shape)
         denoiser, _ = build_pca_unet(pca.dim, len(cond_stats.columns), base_ch=diff_cfg.get("unet_base_ch", 64))
@@ -147,6 +160,7 @@ def visualize_diff_run(diff_run_dir: Path, ae_run_dir: Path, cfg: dict[str, Any]
         codec = DiffusionLatentCodec.from_mode("mlp", pca, z_shape)
         sample_shape = codec.sample_shape(1)
     else:
+        # 遗留路径：直接在 AE 潜特征图上扩散
         denoiser = LatentDiffusionUNet(ae_cfg["latent_channels"], len(cond_stats.columns)).to(device)
         denoiser.load_state_dict(ckpt_diff["model"])
         sample_shape = (1, ae_cfg["latent_channels"], ae_cfg["latent_spatial"], ae_cfg["latent_spatial"])
@@ -199,6 +213,7 @@ def visualize_diff_run(diff_run_dir: Path, ae_run_dir: Path, cfg: dict[str, Any]
 
 
 def main() -> None:
+    """CLI 入口：可视化 AE run，可选同时可视化扩散 run。"""
     parser = argparse.ArgumentParser(description="Visualize training & test results")
     parser.add_argument("--config", default="configs/train.json")
     parser.add_argument("--ae-run-dir", required=True)

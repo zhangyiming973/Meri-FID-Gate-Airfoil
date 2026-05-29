@@ -1,41 +1,15 @@
 #!/usr/bin/env python3
-"""Train size-guided latent diffusion pipeline for sdf2d meridian bodies."""
-from __future__ import annotations
+"""【已弃用】MLP 方案训练入口。
 
-import argparse
-from pathlib import Path
+请改用统一 CLI::
 
-from src.train.train_autoencoder import train_autoencoder
-from src.train.train_diffusion import train_diffusion
-from src.utils.config import load_config
-from src.utils.paths import make_run_dir, project_root
+    python run.py train --scheme mlp --dataset single|F404 [--fast] [--stage ae|diff|all]
 
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/train.json")
-    parser.add_argument("--stage", choices=["all", "ae", "diff"], default="all")
-    parser.add_argument("--ae-run-dir", default=None, help="Existing AE run for diffusion-only")
-    parser.add_argument("--fast", action="store_true", help="Fewer epochs for smoke test")
-    args = parser.parse_args()
-
-    cfg_path = project_root() / args.config
-    cfg = load_config(cfg_path)
-    if args.fast:
-        cfg["autoencoder"]["epochs"] = 15
-        cfg["diffusion"]["epochs"] = 20
-
-    pipeline_dir = make_run_dir(cfg["dataset_name"], "pipeline")
-    print(f"Pipeline output: {pipeline_dir}")
-
-    ae_dir = Path(args.ae_run_dir) if args.ae_run_dir else None
-    if args.stage in ("all", "ae"):
-        ae_dir = train_autoencoder(cfg, pipeline_dir / "autoencoder")
-    if args.stage in ("all", "diff"):
-        if ae_dir is None:
-            raise ValueError("--ae-run-dir required for diffusion-only stage")
-        train_diffusion(cfg, ae_dir, pipeline_dir / "diffusion")
-
+保留本文件仅为兼容旧文档或脚本中的调用路径；直接执行将打印迁移提示并退出。
+"""
+import run  # noqa: F401  # 保留导入以便静态分析仍识别 run 模块
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(
+        "Use: python run.py train --scheme mlp --dataset single|F404 [--fast] [--stage ae|diff|all]"
+    )

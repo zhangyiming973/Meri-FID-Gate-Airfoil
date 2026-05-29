@@ -1,76 +1,124 @@
 # Meridian SDF 尺寸引导潜空间扩散
 
-基于 `sdf2d` 子午面数据的**两阶段生成管线**：先用自编码器学习紧凑潜表示，再在潜空间上训练**尺寸条件扩散模型**，根据关键几何参数生成 SDF 形状。
+基于 `sdf2d` 子午面数据的**两阶段生成管线**：自编码器学习潜表示，再在潜空间上训练**尺寸条件扩散模型**。
 
-## 功能概览
+## 架构概览
 
-| 阶段 | 模块 | 说明 |
-|------|------|------|
-| 1 | `MeridianAutoEncoder` | 输入 SDF（可选拼接语义 mask）→ 潜向量 `z_m` → 重建 SDF |
-| 2 | `LatentRepresentationGate` | 校验重建质量与潜空间分布，决定是否进入扩散训练 |
-| 3 | 条件扩散 | 在压缩潜空间上，以尺寸参数为条件生成 `z_m`，再经 AE 解码为 SDF |
+| 阶段 | 说明 |
+|------|------|
+| 1. 自编码器 | SDF + 语义 mask → 潜向量 `z_m` → 重建 SDF |
+| 2. 质量门禁 | 校验重建质量与潜空间分布 |
+| 3. 条件扩散 | 以 5 维设计参数为条件生成 `z_m`，再解码为 SDF |
 
-**条件向量（5 维）**：`hub_r_end_mm`、`rim_r_start_mm`、`angle_web_deg`、`r_trans_bore_web_mm`、`z_min`
+**条件向量**：`hub_r_end_mm`、`rim_r_start_mm`、`angle_web_deg`、`r_trans_bore_web_mm`、`z_min`
 
-## 扩散方案对比
+## 方案与目录
 
-| 方案 | 入口 | 去噪器 | 输出目录 |
-|------|------|--------|----------|
-| **MLP** | `train.py` | PCA(128) + MLP | `outputs/{ds}/pipeline/` |
-| **PCA-UNet** | `train_unet.py` | PCA(128) → 网格 + UNet | `outputs/{ds}/unet_pipeline/` |
+每个扩散方案代码**完全独立**，位于 `schemes/` 下，配置放在各自 `config/` 目录：
 
-### PCA-UNet 独立入口
+| 方案 | `--scheme` | 目录 | 去噪器 |
+|------|------------|------|--------|
+| MLP 扩散 | `mlp` | `schemes/mlp/` | PCA(128) + MLP |
+| PCA-UNet | `pca_unet` | `schemes/pca_unet/` | PCA(128) → 网格 + UNet |
+
+## 数据集与固定划分
+
+每个数据集在 `data/{dataset}/` 下维护元数据与**固定训练/测试划分**：
+
+```
+data/
+├── single/
+│   ├── dataset.json              # 数据集元数据、划分参数
+│   └── processed/
+│       ├── meridian_index.csv
+│       ├── train_split.csv       # 固定训练集（prepare-splits 生成）
+│       ├── test_split.csv        # 固定测试集
+│       ├── condition_stats.json
+│       └── meridian_samples/
+└── F404/
+    ├── dataset.json
+    └── processed/
+        ├── train_split.csv
+        ├── test_split.csv
+        └── ...
+```
+
+训练任务直接从 `data/{dataset}/processed/train_split.csv` 和 `test_split.csv` 读取，不再每次随机划分。
+
+## 统一入口 `run.py`
+
+所有数据准备、训练、测试均通过一条命令启动，用 `--scheme` 和 `--dataset` 区分方案与数据：
 
 ```bash
-# 全流程：AE + UNet 扩散
-PYTHONPATH=. python3 train_unet.py
+# 0. 首次使用：生成固定划分（每个数据集执行一次）
+python run.py prepare-splits --dataset single
+python run.py prepare-splits --dataset F404
 
-# 仅训练 UNet（复用已有 AE）
-PYTHONPATH=. python3 train_unet.py --stage unet \
-  --ae-run-dir outputs/single/unet_pipeline/XXXX/autoencoder
+# 1. 训练 — MLP 方案 + F404 数据集（全流程）
+python run.py train --scheme mlp --dataset F404
 
-# 快速冒烟
-PYTHONPATH=. python3 train_unet.py --fast
+# 2. 训练 — PCA-UNet 方案 + single 数据集
+python run.py train --scheme pca_unet --dataset single
 
-# 可视化
-PYTHONPATH=. python3 visualize_unet.py \
-  --ae-run-dir outputs/single/unet_pipeline/XXXX/autoencoder \
-  --unet-run-dir outputs/single/unet_pipeline/XXXX/diffusion_unet
+# 3. 分阶段训练
+python run.py train --scheme mlp --dataset F404 --stage ae
+python run.py train --scheme mlp --dataset F404 --stage diff \
+  --ae-run-dir outputs/mlp/F404/{timestamp}/autoencoder
+
+python run.py train --scheme pca_unet --dataset F404 --stage unet \
+  --ae-run-dir outputs/pca_unet/F404/{timestamp}/autoencoder
+
+# 4. 快速冒烟
+python run.py train --scheme mlp --dataset F404 --fast
+
+# 5. 测试 / 可视化
+python run.py test --scheme mlp --dataset F404 \
+  --run-dir outputs/mlp/F404/{timestamp}
 ```
 
-配置：`configs/train_unet.json`（`unet` 配置块，与 `train.json` 独立）
+配置文件自动从 `schemes/{scheme}/config/{dataset}.json` 读取，无需手动指定 `--config`。
 
-### PCA-UNet 架构
+## 输出目录
+
+统一格式：`outputs/{方案}/{数据集}/{时间戳}/`
 
 ```
-z_m (64×16×16)
-    ↓ PCA 压缩
-w (128 维向量)
-    ↓ reshape
-grid (1×8×16)
-    ↓ Conditional UNet 扩散 (DDIM + CFG)
-grid̂
-    ↓ flatten + PCA 逆变换
-ẑ_m → AE Decoder → SDF
-```
+outputs/mlp/F404/20260529_234932/
+├── logs/train.log
+├── autoencoder/          # AE 权重、潜向量、Gate 报告、重建可视化
+└── diffusion/            # 扩散模型、生成指标、生成可视化
 
-UNet 采用 **encoder-decoder + skip connection**，条件向量广播到空间维度后与噪声 latent 拼接。
+outputs/pca_unet/single/20260529_120000/
+├── logs/train.log
+├── autoencoder/
+└── diffusion/
+```
 
 ## 项目结构
 
 ```
-project/
-├── train.py                # MLP 扩散管线
-├── train_unet.py           # PCA-UNet 独立管线
-├── visualize.py
-├── visualize_unet.py
-├── configs/
-│   ├── train.json          # MLP 配置
-│   └── train_unet.json     # UNet 配置（unet 块）
-├── src/train/
-│   ├── train_diffusion.py      # MLP 训练
-│   └── train_unet_diffusion.py # UNet 训练
-└── outputs/{dataset}/pipeline/{timestamp}/
+meri-fid-gate/
+├── run.py                      # 统一入口
+├── scripts/
+│   ├── prepare_splits.py       # 生成固定 train/test 划分
+│   ├── split_utils.py
+│   └── build_schemes.py        # 从 src 重建 scheme 包（开发用）
+├── data/
+│   ├── single/dataset.json
+│   └── F404/dataset.json
+├── schemes/
+│   ├── mlp/                    # MLP 方案（独立代码）
+│   │   ├── config/single.json
+│   │   ├── config/F404.json
+│   │   ├── pipeline.py
+│   │   ├── models/
+│   │   ├── train/
+│   │   └── ...
+│   └── pca_unet/               # PCA-UNet 方案（独立代码）
+│       ├── config/
+│       ├── pipeline.py
+│       └── ...
+└── outputs/{scheme}/{dataset}/{timestamp}/
 ```
 
 ## 环境安装
@@ -79,29 +127,25 @@ project/
 pip install -r requirements.txt
 ```
 
-## 快速开始
+## F404 数据注意事项
 
-### 全流程（MLP 方案）
+F404 需在 `data/F404/dataset.json` 中设置：
 
-```bash
-PYTHONPATH=. python3 train.py --config configs/train.json
-```
+- `split.filter_passed_quality: false`（当前全部 `passed_quality=False`）
+- `condition_specs_file`（自动从 JSONL 补齐 5 维条件列）
 
-## 配置说明（`train_unet.json` → `unet` 块）
+## 添加新方案
 
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `pca_dim` | 128 | PCA 压缩维度 |
-| `unet_base_ch` | 64 | UNet 基础通道数 |
-| `cfg_scale` | 1.5 | Classifier-Free Guidance 强度 |
-| `use_ddim` | true | DDIM 采样 |
+1. 在 `schemes/` 下新建目录（如 `schemes/my_scheme/`），复制并独立维护全套代码
+2. 在 `schemes/my_scheme/config/` 下为每个数据集添加 JSON 配置
+3. 在 `run.py` 的 `SCHEMES` 字典中注册方案名与 `pipeline` 模块
 
-## 参考指标
+## 参考指标（single 数据集）
 
 | 方案 | mean_gen_l1 | AE 重建 L1 |
 |------|-------------|------------|
-| MLP (PCA) | ~0.036 | ~0.008 |
-| 原始 UNet | ~0.76 | ~0.008 |
+| MLP | ~0.036 | ~0.008 |
+| PCA-UNet | ~0.014 | ~0.008 |
 
 ## 许可证
 

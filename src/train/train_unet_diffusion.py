@@ -1,3 +1,8 @@
+"""PCA 网格条件 UNet 扩散模型训练脚本。
+
+将 PCA 系数重塑为 C×H×W 网格，用 ConditionalUNet 做空间扩散去噪，
+相比 MLP 路径能利用潜空间的局部结构。
+"""
 from __future__ import annotations
 
 import json
@@ -40,6 +45,7 @@ def _eval_generation_l1(
     unet_cfg: dict,
     max_samples: int = 5,
 ) -> float:
+    """快速生成 L1 评估（采样少量测试样本）。"""
     unet.eval()
     ae.eval()
     losses = []
@@ -63,7 +69,16 @@ def _eval_generation_l1(
 
 
 def train_unet_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path | None = None) -> Path:
-    """Train PCA-grid Conditional UNet diffusion on AE latents."""
+    """PCA 网格 UNet 扩散完整训练流水线。
+
+    Args:
+        cfg: 训练配置（unet 节或 diffusion 节作为 UNet 超参）。
+        ae_run_dir: 已完成的自编码器 run 目录。
+        run_dir: 输出目录，None 时自动创建。
+
+    Returns:
+        UNet 扩散训练 run 目录路径。
+    """
     root = project_root()
     run_dir = run_dir or make_run_dir(cfg["dataset_name"], "diffusion_unet")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -75,6 +90,7 @@ def train_unet_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path | 
     train_recs = load_records(ae_run_dir / "body_latent_train.json")
     test_recs = load_records(ae_run_dir / "body_latent_test.json")
 
+    # PCA + 网格编解码器
     z_train_np = np.stack([r.z_m for r in train_recs])
     z_shape = z_train_np.shape
     pca_dim = unet_cfg.get("pca_dim", 128)
@@ -112,6 +128,7 @@ def train_unet_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path | 
     }
 
     def eval_noise_loss() -> float:
+        """测试集噪声预测 MSE。"""
         unet.eval()
         losses = []
         with torch.no_grad():

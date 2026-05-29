@@ -1,3 +1,8 @@
+"""Meridian SDF 自编码器端到端训练脚本。
+
+流程：数据划分 → AE 训练 → 潜变量记录 → 质量门控 → 重建可视化。
+此为遗留共享源码，可能被 schemes/ 下的新实现取代，但仍保留在仓库中。
+"""
 from __future__ import annotations
 
 import json
@@ -34,6 +39,7 @@ from src.utils.visualization import (
 
 @torch.no_grad()
 def _physics_for_sample(batch_physics, index: int) -> dict:
+    """从 batch 物理摘要中提取单样本 dict（兼容 list 与 collated dict 格式）。"""
     if isinstance(batch_physics, list):
         return batch_physics[index]
     return {
@@ -48,6 +54,10 @@ def build_latent_records(
     loader: DataLoader,
     device: torch.device,
 ) -> list[BodyLatentRecord]:
+    """遍历 DataLoader，编码并记录每条样本的潜变量与重建指标。
+
+    供门控评估与扩散训练阶段的 body_latent_*.json 生成。
+    """
     model.eval()
     w = AELossWeights()
     records: list[BodyLatentRecord] = []
@@ -80,20 +90,37 @@ def build_latent_records(
 
 
 def train_autoencoder(cfg: dict[str, Any], run_dir: Path | None = None) -> Path:
+    """自编码器完整训练流水线。
+
+    Args:
+        cfg: 训练配置字典（通常来自 configs/train.json）。
+        run_dir: 输出目录，None 时自动创建带时间戳的目录。
+
+    Returns:
+        本次训练的 run 目录路径。
+    """
     root = project_root()
     run_dir = run_dir or make_run_dir(cfg["dataset_name"], "autoencoder")
     run_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() and cfg.get("device") == "cuda" else "cpu")
 
+    # --- 数据准备 ---
     param_path = root / cfg.get("param_table_path", "")
     param_table = pd.read_csv(param_path) if param_path.exists() else None
+    split_cfg = cfg.get("split", {})
+    condition_columns = cfg.get("condition_columns")
     train_df, test_df = make_train_test_split(
         root / cfg["index_path"],
-        test_size=cfg["split"]["test_size"],
-        seed=cfg["split"]["seed"],
+        test_size=split_cfg.get("test_size", 10),
+        seed=split_cfg.get("seed", 42),
         output_dir=run_dir / "splits",
+        filter_passed_quality=split_cfg.get("filter_passed_quality", True),
+        condition_columns=condition_columns,
+        root=root,
+        condition_specs_path=cfg.get("condition_specs_path"),
+        param_table_path=cfg.get("param_table_path"),
     )
-    cond_stats = build_condition_stats(train_df)
+    cond_stats = build_condition_stats(train_df, condition_columns)
     save_json(cond_stats.to_dict(), run_dir / "condition_stats.json")
 
     ae_cfg = cfg["autoencoder"]
@@ -104,6 +131,7 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path | None = None) -> Path:
     train_loader = DataLoader(train_ds, batch_size=ae_cfg["batch_size"], shuffle=True, num_workers=nw)
     test_loader = DataLoader(test_ds, batch_size=ae_cfg["batch_size"], shuffle=False, num_workers=nw)
 
+    # --- 模型与优化器 ---
     in_ch = 2 if ae_cfg["use_semantic"] else 1
     model = MeridianAutoEncoder(in_ch, ae_cfg["latent_channels"], ae_cfg["latent_spatial"]).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=ae_cfg["lr"])
@@ -111,6 +139,7 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path | None = None) -> Path:
     history: dict[str, list[float]] = {"train_total": [], "train_l1": [], "val_l1": [], "val_total": []}
     best_val = float("inf")
 
+    # --- 训练循环 ---
     for epoch in range(1, ae_cfg["epochs"] + 1):
         model.train()
         tr_tot, tr_l1, n = 0.0, 0.0, 0
@@ -127,6 +156,7 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path | None = None) -> Path:
         history["train_total"].append(tr_tot / n)
         history["train_l1"].append(tr_l1 / n)
 
+        # 验证集评估
         model.eval()
         vl_tot, vl_l1, vn = 0.0, 0.0, 0
         with torch.no_grad():
@@ -140,6 +170,7 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path | None = None) -> Path:
         history["val_total"].append(vl_tot / max(vn, 1))
         history["val_l1"].append(vl_l1 / max(vn, 1))
 
+        # 按验证 L1 保存最优 checkpoint
         if history["val_l1"][-1] < best_val:
             best_val = history["val_l1"][-1]
             torch.save({"model": model.state_dict(), "in_channels": in_ch, "epoch": epoch}, run_dir / "best_autoencoder.pt")
@@ -147,10 +178,12 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path | None = None) -> Path:
         if epoch == 1 or epoch % 10 == 0 or epoch == ae_cfg["epochs"]:
             print(f"[AE] ep{epoch}: train_l1={history['train_l1'][-1]:.4f} val_l1={history['val_l1'][-1]:.4f}")
 
+    # --- 训练曲线与历史 ---
     plot_training_curves(history, run_dir / "training_curves.png", "AutoEncoder Training")
     plot_training_dashboard(history, run_dir / "training_dashboard.png", "AutoEncoder Training Dashboard")
     save_json(history, run_dir / "training_history.json")
 
+    # --- 最优模型：潜变量记录与门控 ---
     ckpt = torch.load(run_dir / "best_autoencoder.pt", map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model"])
     train_records = build_latent_records(model, train_loader, device)
@@ -171,6 +204,7 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path | None = None) -> Path:
         run_dir / "recon_l1_train_vs_test.png",
     )
 
+    # --- 重建可视化（train / test）---
     vis = run_dir / "visualizations"
     for split_name, records, loader in [
         ("train", train_records, train_loader),
@@ -199,7 +233,7 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path | None = None) -> Path:
         save_json({"metrics": metrics, "mean_l1": float(np.mean([m["l1"] for m in metrics]))},
                   vis / f"metrics_{split_name}.json")
 
-    # legacy path
+    # 遗留路径：测试集重建图写入 reconstructions/（兼容旧脚本）
     vis_legacy = run_dir / "reconstructions"
     vis_legacy.mkdir(exist_ok=True)
     model.eval()

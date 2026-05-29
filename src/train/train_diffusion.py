@@ -1,3 +1,8 @@
+"""MLP 去噪器扩散模型训练脚本。
+
+在 PCA 压缩后的潜向量上训练条件 DDPM/DDIM（denoiser=mlp），
+可选 physics guidance 约束生成几何的壁厚合理性。
+"""
 from __future__ import annotations
 
 import json
@@ -30,6 +35,7 @@ from src.utils.visualization import (
 
 
 def _build_denoiser(diff_cfg: dict, codec: DiffusionLatentCodec, cond_dim: int, device: torch.device):
+    """根据配置构建去噪网络（当前仅支持 MLP）。"""
     mode = diff_cfg.get("denoiser", "mlp")
     if mode == "unet":
         raise ValueError("Raw UNet diffusion moved to train_unet.py; use denoiser=mlp or run train_unet.py")
@@ -47,6 +53,10 @@ def eval_generation_l1(
     diff_cfg,
     max_samples: int = 5,
 ) -> float:
+    """快速生成评估：采样潜变量 → AE 解码 → 与 GT 潜变量重建的 SDF 比较 L1。
+
+    训练过程中用于选择最优 checkpoint（按 gen_l1 而非噪声 MSE）。
+    """
     denoiser.eval()
     ae.eval()
     losses = []
@@ -70,6 +80,16 @@ def eval_generation_l1(
 
 
 def train_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path | None = None) -> Path:
+    """MLP 扩散模型完整训练流水线。
+
+    Args:
+        cfg: 训练配置（含 diffusion、physics_guidance 等节）。
+        ae_run_dir: 已完成的自编码器 run 目录（含 checkpoint 与 body_latent_*.json）。
+        run_dir: 扩散训练输出目录，None 时自动创建。
+
+    Returns:
+        扩散训练 run 目录路径。
+    """
     root = project_root()
     run_dir = run_dir or make_run_dir(cfg["dataset_name"], "diffusion")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -80,6 +100,7 @@ def train_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path | None 
     train_recs = load_records(ae_run_dir / "body_latent_train.json")
     test_recs = load_records(ae_run_dir / "body_latent_test.json")
 
+    # PCA 压缩 AE 潜变量
     z_train_np = np.stack([r.z_m for r in train_recs])
     z_shape = z_train_np.shape
     pca_dim = diff_cfg.get("pca_dim", 128)
@@ -92,6 +113,7 @@ def train_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path | None 
     c_train = torch.from_numpy(np.stack([r.condition_norm for r in train_recs])).float()
     train_loader = DataLoader(TensorDataset(z_enc, c_train), batch_size=diff_cfg["batch_size"], shuffle=True)
 
+    # 加载冻结的自编码器（用于 physics guidance 与最终 SDF 解码）
     ckpt = torch.load(ae_run_dir / "best_autoencoder.pt", map_location=device, weights_only=False)
     ae = MeridianAutoEncoder(ckpt["in_channels"], ae_cfg["latent_channels"], ae_cfg["latent_spatial"]).to(device)
     ae.load_state_dict(ckpt["model"])
@@ -108,6 +130,7 @@ def train_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path | None 
     sample_shape = codec.sample_shape(1)
 
     def eval_noise_loss() -> float:
+        """在测试集上评估噪声预测 MSE。"""
         denoiser.eval()
         losses = []
         with torch.no_grad():
@@ -127,10 +150,12 @@ def train_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path | None 
             z0, cond = z0.to(device), cond.to(device)
             t = torch.randint(0, schedule.timesteps, (z0.shape[0],), device=device)
             xt, noise = schedule.q_sample(z0, t)
+            # CFG 训练：随机 dropout 工况条件
             drop = torch.rand(z0.shape[0], device=device) < diff_cfg["cfg_dropout"]
             pred = denoiser(xt, t, cond, cond_mask=(~drop).float())
 
             loss = torch.nn.functional.mse_loss(pred, noise)
+            # 训练后期启用 physics guidance：约束预测 x0 的壁厚风险
             if pg_on and epoch > diff_cfg["epochs"] // 3:
                 x0_hat_enc = schedule.predict_x0(xt, t, pred)
                 z_raw_hat = codec.decode_to_raw(x0_hat_enc)
@@ -167,6 +192,7 @@ def train_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path | None 
     plot_training_dashboard(history, run_dir / "training_dashboard.png", "Diffusion Training Dashboard")
     save_json(history, run_dir / "training_history.json")
 
+    # --- 最优模型：全测试集生成与可视化 ---
     denoiser.load_state_dict(torch.load(run_dir / "best_diffusion.pt", map_location=device, weights_only=False)["model"])
     denoiser.eval()
 

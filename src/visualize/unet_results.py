@@ -1,4 +1,7 @@
-"""Visualize PCA-UNet pipeline results."""
+"""PCA-UNet 扩散流水线结果可视化 CLI。
+
+在 visualize_ae_run 基础上，额外为 PCA 网格 UNet 扩散 run 生成测试集生成图。
+"""
 from __future__ import annotations
 
 import argparse
@@ -31,6 +34,13 @@ from src.visualize.results import visualize_ae_run
 
 @torch.no_grad()
 def visualize_unet_run(unet_run_dir: Path, ae_run_dir: Path, cfg: dict[str, Any]) -> None:
+    """为 PCA-UNet 扩散训练 run 生成测试集生成可视化。
+
+    Args:
+        unet_run_dir: UNet 扩散 run 目录（含 best_unet_diffusion.pt）。
+        ae_run_dir: 对应的自编码器 run 目录。
+        cfg: 训练配置字典。
+    """
     device = torch.device("cuda" if torch.cuda.is_available() and cfg.get("device") == "cuda" else "cpu")
     vis_root = unet_run_dir / "visualizations"
     vis_root.mkdir(exist_ok=True)
@@ -47,6 +57,7 @@ def visualize_unet_run(unet_run_dir: Path, ae_run_dir: Path, cfg: dict[str, Any]
     ae.load_state_dict(ckpt_ae["model"])
     ae.eval()
 
+    # 兼容 best_unet_diffusion.pt 与 best_diffusion.pt 两种命名
     ckpt_path = unet_run_dir / "best_unet_diffusion.pt"
     if not ckpt_path.exists():
         ckpt_path = unet_run_dir / "best_diffusion.pt"
@@ -97,6 +108,7 @@ def visualize_unet_run(unet_run_dir: Path, ae_run_dir: Path, cfg: dict[str, Any]
 
 
 def main() -> None:
+    """CLI 入口：先可视化 AE run，再可视化 UNet 扩散 run。"""
     parser = argparse.ArgumentParser(description="Visualize PCA-UNet training results")
     parser.add_argument("--config", default="configs/train_unet.json")
     parser.add_argument("--ae-run-dir", required=True)
