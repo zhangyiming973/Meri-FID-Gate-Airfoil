@@ -17,12 +17,12 @@ from tqdm import tqdm
 from schemes.mlp.data.dataset import ConditionStats
 from schemes.mlp.losses.ae_losses import physics_risk_proxy
 from schemes.mlp.models.autoencoder import MeridianAutoEncoder
-from schemes.mlp.models.diffusion import DiffusionSchedule, LatentDiffusionUNet
+from schemes.mlp.models.diffusion import DiffusionSchedule
 from schemes.mlp.models.latent_pca import LatentPCA, save_latent_pca
 from schemes.mlp.models.mlp_denoiser import MLPDenoiser
 from schemes.mlp.records.body_latent import load_records
 from schemes.mlp.train.diffusion_codec import DiffusionLatentCodec
-from schemes.mlp.utils.paths import make_run_dir, project_root
+from schemes.mlp.utils.paths import project_root
 from schemes.mlp.utils.visualization import (
     plot_per_sample_metrics,
     plot_sample_grid,
@@ -38,7 +38,7 @@ def _build_denoiser(diff_cfg: dict, codec: DiffusionLatentCodec, cond_dim: int, 
     """根据配置构建去噪网络；MLP 方案默认 denoiser=mlp。"""
     mode = diff_cfg.get("denoiser", "mlp")
     if mode == "unet":
-        raise ValueError("Raw UNet diffusion moved to train_unet.py; use denoiser=mlp or run train_unet.py")
+        raise ValueError("Raw UNet denoiser is not supported in mlp scheme; use pca_unet scheme instead")
     return MLPDenoiser(codec.pca.dim, cond_dim, hidden=diff_cfg.get("mlp_hidden", 512)).to(device), "mlp"
 
 

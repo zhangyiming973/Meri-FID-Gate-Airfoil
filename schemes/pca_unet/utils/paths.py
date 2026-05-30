@@ -24,15 +24,3 @@ def make_run_dir(dataset: str) -> Path:
     run_dir = project_root() / "outputs" / scheme_name() / dataset / ts
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
-
-
-import json
-
-
-def data_processed_dir(dataset: str) -> Path:
-    """根据 dataset.json 元信息解析处理后数据目录。"""
-    root = project_root()
-    meta_path = root / "data" / dataset / "dataset.json"
-    with open(meta_path, encoding="utf-8") as f:
-        meta = json.load(f)
-    return root / "data" / dataset / meta["processed_dir"]

@@ -109,8 +109,17 @@ def compute_ae_losses(
     pt = _physics_tensors(physics, recon.device, recon.dtype)
     if pt is not None:
         gt_t, gt_a = pt
-        dim_loss = F.l1_loss(estimate_min_thickness(recon, sdf_scale).squeeze(-1), gt_t.squeeze(-1)) + \
-                   F.l1_loss(estimate_area(recon, sdf_scale).squeeze(-1), gt_a.squeeze(-1)) / 10000.0
+        est_thick = estimate_min_thickness(recon, sdf_scale)
+        est_area = estimate_area(recon, sdf_scale)
+        if est_thick.ndim > 1 and est_thick.shape[-1] == 1:
+            est_thick = est_thick.squeeze(-1)
+        if est_area.ndim > 1 and est_area.shape[-1] == 1:
+            est_area = est_area.squeeze(-1)
+        if gt_t.ndim == 0:
+            gt_t = gt_t.unsqueeze(0)
+        if gt_a.ndim == 0:
+            gt_a = gt_a.unsqueeze(0)
+        dim_loss = F.l1_loss(est_thick, gt_t) + F.l1_loss(est_area, gt_a) / 10000.0
 
     sem = torch.tensor(0.0, device=recon.device)
     if semantic is not None and w.semantic > 0:

@@ -22,7 +22,7 @@ from schemes.pca_unet.models.latent_pca import LatentPCA, save_latent_pca
 from schemes.pca_unet.models.pca_unet import build_pca_unet
 from schemes.pca_unet.records.body_latent import load_records
 from schemes.pca_unet.train.diffusion_codec import DiffusionLatentCodec
-from schemes.pca_unet.utils.paths import make_run_dir, project_root
+from schemes.pca_unet.utils.paths import project_root
 from schemes.pca_unet.utils.visualization import (
     plot_per_sample_metrics,
     plot_sample_grid,

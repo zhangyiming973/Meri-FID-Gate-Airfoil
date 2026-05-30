@@ -71,12 +71,26 @@ python run.py train --scheme pca_unet --dataset F404 --stage unet \
 # 4. 快速冒烟
 python run.py train --scheme mlp --dataset F404 --fast
 
-# 5. 测试 / 可视化
-python run.py test --scheme mlp --dataset F404 \
-  --run-dir outputs/mlp/F404/{timestamp}
+# 5. 测试 / 可视化（聚合 AE + 扩散产物，替代旧 visualize.py）
+python run.py test --scheme mlp --run-dir outputs/mlp/F404/{timestamp}
+python run.py test --scheme pca_unet --run-dir outputs/pca_unet/F404/{timestamp}
 ```
 
 配置文件自动从 `schemes/{scheme}/config/{dataset}.json` 读取，无需手动指定 `--config`。
+
+### `test` 子命令输出
+
+`run.py test` 从 `autoencoder/` 与 `diffusion/` 读取训练阶段产物，汇总到 run 根目录 `visualizations/`：
+
+| 文件 | 说明 |
+| ---- | ---- |
+| `summary_report.json` | AE 门控、扩散 L1 指标、已复制 artifact 列表 |
+| `ae_training_dashboard.png` 等 | 从 AE 阶段复制的训练曲线与重建图 |
+| `diff_grid_test.png` 等 | 从扩散阶段复制的生成网格与指标图 |
+| `test_generation_l1.png` | 逐样本生成 L1 vs 原始 SDF |
+| `test_ae_recon_l1.png` | 逐样本 AE 重建 L1 vs 原始 SDF |
+| `test_gen_vs_ae_recon.png` | 生成 vs AE 重建并排对比 |
+| `generations/` | 各测试样本 SDF 三联图副本 |
 
 ## 输出目录
 
@@ -86,12 +100,14 @@ python run.py test --scheme mlp --dataset F404 \
 outputs/mlp/F404/20260529_234932/
 ├── logs/train.log
 ├── autoencoder/          # AE 权重、潜向量、Gate 报告、重建可视化
-└── diffusion/            # 扩散模型、生成指标、生成可视化
+├── diffusion/            # 扩散模型、生成指标、生成可视化
+└── visualizations/       # run.py test 汇总报告（训练曲线、对比图、summary_report.json）
 
 outputs/pca_unet/single/20260529_120000/
 ├── logs/train.log
 ├── autoencoder/
-└── diffusion/
+├── diffusion/
+└── visualizations/
 ```
 
 ## 项目结构
@@ -101,8 +117,7 @@ meri-fid-gate/
 ├── run.py                      # 统一入口
 ├── scripts/
 │   ├── prepare_splits.py       # 生成固定 train/test 划分
-│   ├── split_utils.py
-│   └── build_schemes.py        # 从 src 重建 scheme 包（开发用）
+│   └── split_utils.py
 ├── data/
 │   ├── single/dataset.json
 │   └── F404/dataset.json

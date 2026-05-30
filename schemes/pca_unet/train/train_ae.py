@@ -16,13 +16,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from schemes.pca_unet.data.dataset import ConditionStats, MeridianSDFDataset
-from schemes.pca_unet.data.splits import build_condition_stats, load_condition_stats, load_splits
+from schemes.pca_unet.data.splits import load_condition_stats, load_splits
 from schemes.pca_unet.gate.latent_gate import GateConfig, LatentRepresentationGate
 from schemes.pca_unet.losses.ae_losses import AELossWeights, compute_ae_losses
 from schemes.pca_unet.models.autoencoder import MeridianAutoEncoder
 from schemes.pca_unet.records.body_latent import BodyLatentRecord, save_records
-from schemes.pca_unet.utils.config import load_config
-from schemes.pca_unet.utils.paths import make_run_dir, project_root
+from schemes.pca_unet.utils.paths import project_root
 from schemes.pca_unet.utils.visualization import (
     plot_gate_report,
     plot_latent_pca,
@@ -106,7 +105,7 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path) -> Path:
 
     # --- 数据准备 ---
     param_path = root / cfg.get("param_table_path", "")
-    param_table = pd.read_csv(param_path) if param_path.exists() else None
+    param_table = pd.read_csv(param_path) if param_path.is_file() else None
     condition_columns = cfg.get("condition_columns")
     processed_dir = Path(cfg["data_root"])
     train_df, test_df = load_splits(processed_dir)
@@ -171,7 +170,8 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path) -> Path:
     plot_training_curves(history, run_dir / "training_curves.png", "AutoEncoder Training")
     plot_training_dashboard(history, run_dir / "training_dashboard.png", "AutoEncoder Training Dashboard")
     save_json(history, run_dir / "training_history.json")
-
+    
+    print("已保存训练结果，正在加载最优权重...")
     # --- 最优模型：导出潜记录与门控 ---
     ckpt = torch.load(run_dir / "best_autoencoder.pt", map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model"])
@@ -184,8 +184,6 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path) -> Path:
     gate_result = gate.evaluate(train_records)
     save_json(gate_result.report, run_dir / "latent_gate_report.json")
     plot_gate_report(gate_result.report, run_dir / "latent_gate_report.png")
-    plot_latent_pca(np.stack([r.z_m.reshape(-1) for r in train_records]), run_dir / "latent_pca_train.png",
-                    [r.sample_id for r in train_records])
     plot_latent_pca(np.stack([r.z_m.reshape(-1) for r in test_records]), run_dir / "latent_pca_test.png",
                     [r.sample_id for r in test_records])
     plot_train_test_metric_compare(
@@ -193,10 +191,9 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path) -> Path:
         run_dir / "recon_l1_train_vs_test.png",
     )
 
-    # --- 重建可视化（train / test 各一套）---
+    # --- 重建可视化（仅测试集）---
     vis = run_dir / "visualizations"
     for split_name, records, loader in [
-        ("train", train_records, train_loader),
         ("test", test_records, test_loader),
     ]:
         out_dir = vis / f"reconstructions_{split_name}"
@@ -221,20 +218,6 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path) -> Path:
         plot_per_sample_metrics(metrics, vis / f"metrics_{split_name}.png", f"Recon L1 ({split_name})")
         save_json({"metrics": metrics, "mean_l1": float(np.mean([m["l1"] for m in metrics]))},
                   vis / f"metrics_{split_name}.json")
-
-    # 兼容旧版输出路径：test 重建单独存一份
-    vis_legacy = run_dir / "reconstructions"
-    vis_legacy.mkdir(exist_ok=True)
-    model.eval()
-    with torch.no_grad():
-        for batch in test_loader:
-            x, sdf = batch["x"].to(device), batch["sdf"].to(device)
-            _, recon = model(x)
-            for i in range(x.shape[0]):
-                sid = batch["sample_id"][i]
-                cond = {c: float(batch["condition_raw"][i][j]) for j, c in enumerate(cond_stats.columns)}
-                plot_sdf_panel(to_numpy(sdf[i, 0]), to_numpy(recon[i, 0]), f"Recon {sid}",
-                               vis_legacy / f"{sid}.png", cond)
 
     save_json({"gate_passed": gate_result.passed, "pass_ratio": gate_result.pass_ratio, "best_val_l1": best_val}, run_dir / "summary.json")
     print(f"AE done -> {run_dir} | gate={gate_result.passed} ratio={gate_result.pass_ratio:.1%}")

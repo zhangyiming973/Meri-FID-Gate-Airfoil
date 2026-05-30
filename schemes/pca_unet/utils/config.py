@@ -21,7 +21,7 @@ def load_config(path: Path) -> dict[str, Any]:
             import yaml  # type: ignore
         except ImportError as exc:
             raise ImportError(
-                "PyYAML not installed. Use configs/train.json or pip install pyyaml."
+                "PyYAML not installed. Use a .json config or pip install pyyaml."
             ) from exc
         return yaml.safe_load(text)
     return json.loads(text)

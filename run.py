@@ -96,7 +96,7 @@ def main() -> None:
         "--stage",
         choices=["all", "ae", "diff", "unet"],
         default="all",
-        # unet 为 pca_unet 方案下扩散阶段的别名，便于与旧脚本 train_unet.py 对齐
+        # unet 为 pca_unet 方案下扩散阶段的别名
         help="Training stage (unet alias for pca_unet diffusion)",
     )
     train.add_argument("--fast", action="store_true", help="Fewer epochs for smoke test")

@@ -1,153 +1,8 @@
-"""扩散模型核心：噪声调度、采样与（遗留）潜空间 UNet。
-
-``DiffusionSchedule`` 实现 DDPM 前向加噪、DDIM/DDPM 反向采样及 CFG；
-PCA-UNet 方案主要使用 ``DiffusionSchedule`` + ``pca_unet.ConditionalUNet``。
-本文件中的 ``LatentDiffusionUNet`` 为直接在 AE 潜特征图上扩散的备选结构。
-"""
+"""扩散模型核心：DDPM 噪声调度与 DDIM/DDPM 采样（含 CFG）。"""
 from __future__ import annotations
 
-import json
-import math
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-
-@dataclass
-class LatentStats:
-    """潜变量的全局均值与标准差，用于可选的 z-score 归一化。"""
-
-    mean: float
-    std: float
-
-    def normalize(self, z: torch.Tensor) -> torch.Tensor:
-        return (z - self.mean) / self.std
-
-    def denormalize(self, z: torch.Tensor) -> torch.Tensor:
-        return z * self.std + self.mean
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"mean": self.mean, "std": self.std}
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> LatentStats:
-        return cls(mean=float(data["mean"]), std=float(data["std"]))
-
-    @classmethod
-    def from_latents(cls, z: torch.Tensor) -> LatentStats:
-        """从潜张量统计全局均值与标准差。"""
-        return cls(mean=float(z.mean()), std=max(float(z.std()), 1e-6))
-
-
-def save_latent_stats(stats: LatentStats, path: Path) -> None:
-    """保存潜变量统计量到 JSON。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(stats.to_dict(), f, indent=2)
-
-
-def load_latent_stats(path: Path) -> LatentStats:
-    """从 JSON 加载潜变量统计量。"""
-    with open(path, encoding="utf-8") as f:
-        return LatentStats.from_dict(json.load(f))
-
-
-class SinusoidalPosEmb(nn.Module):
-    """扩散时间步正弦位置编码。"""
-
-    def __init__(self, dim: int) -> None:
-        super().__init__()
-        self.dim = dim
-
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
-        half = self.dim // 2
-        freqs = torch.exp(-math.log(10000) * torch.arange(half, device=t.device, dtype=torch.float32) / half)
-        args = t.float().unsqueeze(1) * freqs.unsqueeze(0)
-        return torch.cat([args.sin(), args.cos()], dim=-1)
-
-
-class ResBlock(nn.Module):
-    """带 FiLM 时间嵌入的残差卷积块。"""
-
-    def __init__(self, ch: int, emb_dim: int) -> None:
-        super().__init__()
-        self.n1 = nn.GroupNorm(8, ch)
-        self.c1 = nn.Conv2d(ch, ch, 3, padding=1)
-        self.n2 = nn.GroupNorm(8, ch)
-        self.c2 = nn.Conv2d(ch, ch, 3, padding=1)
-        self.emb = nn.Linear(emb_dim, ch * 2)
-
-    def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
-        h = self.c1(F.silu(self.n1(x)))
-        scale, shift = self.emb(emb).chunk(2, dim=-1)
-        h = self.n2(h) * (1 + scale[:, :, None, None]) + shift[:, :, None, None]
-        return x + self.c2(F.silu(h))
-
-
-class LatentDiffusionUNet(nn.Module):
-    """直接在 AE 潜特征图上做条件扩散的轻量 UNet（非 PCA 网格方案）。
-
-    条件向量经空间广播后与带噪潜变量拼接；时间步与条件分别嵌入后注入 ResBlock。
-    """
-
-    def __init__(self, latent_channels: int = 64, cond_dim: int = 5, time_dim: int = 128, base_ch: int = 128) -> None:
-        super().__init__()
-        self.latent_channels = latent_channels
-        self.cond_dim = cond_dim
-        self.time_mlp = nn.Sequential(
-            SinusoidalPosEmb(time_dim),
-            nn.Linear(time_dim, time_dim),
-            nn.SiLU(),
-            nn.Linear(time_dim, time_dim),
-        )
-        self.cond_mlp = nn.Sequential(
-            nn.Linear(cond_dim, time_dim),
-            nn.SiLU(),
-            nn.Linear(time_dim, time_dim),
-        )
-        emb_dim = time_dim * 2
-        in_ch = latent_channels + cond_dim
-        self.in_conv = nn.Conv2d(in_ch, base_ch, 3, padding=1)
-        self.rb1 = ResBlock(base_ch, emb_dim)
-        self.rb2 = ResBlock(base_ch, emb_dim)
-        self.mid = ResBlock(base_ch, emb_dim)
-        self.rb3 = ResBlock(base_ch, emb_dim)
-        self.rb4 = ResBlock(base_ch, emb_dim)
-        self.out_conv = nn.Conv2d(base_ch, latent_channels, 3, padding=1)
-
-    def _apply_cond_mask(self, condition: torch.Tensor, cond_mask: torch.Tensor | None) -> torch.Tensor:
-        """CFG 条件掩码：零向量表示无条件。"""
-        if cond_mask is None:
-            return condition
-        if cond_mask.ndim == 1:
-            return condition * cond_mask.unsqueeze(-1)
-        return condition * cond_mask
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        t: torch.Tensor,
-        condition: torch.Tensor,
-        cond_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        condition = self._apply_cond_mask(condition, cond_mask)
-        emb = torch.cat([self.time_mlp(t), self.cond_mlp(condition)], dim=-1)
-        b, _, h, w = x.shape
-        c_map = condition.unsqueeze(-1).unsqueeze(-1).expand(b, self.cond_dim, h, w)
-        h0 = self.in_conv(torch.cat([x, c_map], dim=1))
-        h0 = self.rb1(h0, emb)
-        h0 = F.avg_pool2d(h0, 2)
-        h0 = self.rb2(h0, emb)
-        h0 = F.interpolate(h0, scale_factor=2, mode="nearest")
-        h0 = self.mid(h0, emb)
-        h0 = self.rb3(h0, emb)
-        h0 = self.rb4(h0, emb)
-        return self.out_conv(h0)
 
 
 class DiffusionSchedule:
@@ -159,7 +14,6 @@ class DiffusionSchedule:
 
     def __init__(self, timesteps: int = 200, device: torch.device | None = None) -> None:
         self.timesteps = timesteps
-        # 线性 β 调度：从 1e-4 到 0.02
         betas = torch.linspace(1e-4, 0.02, timesteps)
         alphas = 1.0 - betas
         self.betas = betas
@@ -180,11 +34,7 @@ class DiffusionSchedule:
         return ab.view(-1, *([1] * (x.ndim - 1)))
 
     def q_sample(self, x0: torch.Tensor, t: torch.Tensor, noise: torch.Tensor | None = None):
-        """前向扩散：x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε。
-
-        Returns:
-            (x_t, noise) 元组。
-        """
+        """前向扩散：x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε。"""
         if noise is None:
             noise = torch.randn_like(x0)
         ab = self._ab_broadcast(self.alpha_bar[t], x0)
@@ -208,7 +58,6 @@ class DiffusionSchedule:
         tt = torch.full((xt.shape[0],), t, device=xt.device, dtype=torch.long)
         eps_c = model(xt, tt, condition)
         eps_u = model(xt, tt, condition, cond_mask=torch.zeros(xt.shape[0], device=xt.device))
-        # CFG：无条件 + scale * (有条件 - 无条件)
         eps = eps_u + cfg_scale * (eps_c - eps_u)
         beta, alpha, ab = self.betas[t], self.alphas[t], self.alpha_bar[t]
         mean = (1 / torch.sqrt(alpha)) * (xt - (beta / torch.sqrt(1 - ab)) * eps)
@@ -226,13 +75,7 @@ class DiffusionSchedule:
         steps: int = 50,
         eta: float = 0.0,
     ) -> torch.Tensor:
-        """DDIM 加速采样（η=0 为确定性），带 CFG。
-
-        Args:
-            shape: 输出张量形状 (B, C, H, W)。
-            steps: 实际采样步数（可小于训练 timesteps）。
-            eta: 随机性系数，0 表示确定性 DDIM。
-        """
+        """DDIM 加速采样（η=0 为确定性），带 CFG。"""
         device = condition.device
         xt = torch.randn(shape, device=device)
         times = torch.linspace(self.timesteps - 1, 0, steps, device=device).long()
