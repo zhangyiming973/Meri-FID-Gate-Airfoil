@@ -21,6 +21,7 @@
 | MLP 扩散       | `mlp`        | `schemes/mlp/`          | PCA(128) + MLP       |
 | PCA-UNet     | `pca_unet`   | `schemes/pca_unet/`     | PCA(128) → 网格 + UNet |
 | 尺寸引导扩散     | `dim_guided` | `schemes/dim_guided/`   | PCA(128) + MLP + ConditionVector 校验 |
+| 尺寸 UNet 扩散   | `dim_unet`   | `schemes/dim_unet/`     | PCA(192) + UNet + ConditionVector 校验 |
 
 ## 数据集与固定划分
 
@@ -65,6 +66,10 @@ python run.py train --scheme pca_unet --dataset single
 python run.py train --scheme dim_guided --dataset single
 python run.py train --scheme dim_guided --dataset F404 --fast
 
+# 3. 训练 — dim_unet 方案（ConditionVector + UNet 尺寸条件扩散）
+python run.py train --scheme dim_unet --dataset single
+python run.py train --scheme dim_unet --dataset F404 --fast
+
 # 4. 分阶段训练
 python run.py train --scheme mlp --dataset F404 --stage ae
 python run.py train --scheme mlp --dataset F404 --stage diff \
@@ -76,6 +81,9 @@ python run.py train --scheme pca_unet --dataset F404 --stage unet \
 python run.py train --scheme dim_guided --dataset single --stage diff \
   --ae-run-dir outputs/dim_guided/single/{timestamp}/autoencoder
 
+python run.py train --scheme dim_unet --dataset single --stage unet \
+  --ae-run-dir outputs/dim_unet/single/{timestamp}/autoencoder
+
 # 5. 快速冒烟
 python run.py train --scheme mlp --dataset F404 --fast
 
@@ -83,9 +91,68 @@ python run.py train --scheme mlp --dataset F404 --fast
 python run.py test --scheme mlp --run-dir outputs/mlp/F404/{timestamp}
 python run.py test --scheme pca_unet --run-dir outputs/pca_unet/F404/{timestamp}
 python run.py test --scheme dim_guided --run-dir outputs/dim_guided/single/{timestamp}
+python run.py test --scheme dim_unet --run-dir outputs/dim_unet/single/{timestamp}
 ```
 
 配置文件自动从 `schemes/{scheme}/config/{dataset}.json` 读取，无需手动指定 `--config`。
+
+### 训练 / 测试计时
+
+各方案训练与测试会自动记录耗时，写入每次 run 目录下的 `timing.json`，并在控制台打印摘要。
+
+**单次 run 的 timing.json 结构示例**：
+
+```json
+{
+  "scheme": "dim_guided",
+  "dataset": "single",
+  "run_dir": "outputs/dim_guided/single/20260530_170454",
+  "train": {
+    "stage_requested": "all",
+    "fast": false,
+    "started_at": "2026-05-30T17:04:54+08:00",
+    "finished_at": "2026-05-30T18:30:12+08:00",
+    "total_sec": 5118.5,
+    "total_human": "1h 25m 18.5s",
+    "stages": {
+      "condition_validation": {"sec": 0.12, "human": "0.1s"},
+      "autoencoder": {"sec": 2100.3, "human": "35m 0.3s"},
+      "diffusion": {"sec": 3018.0, "human": "50m 18.0s"}
+    }
+  },
+  "test": {
+    "total_sec": 45.2,
+    "total_human": "45.2s",
+    "stages": {
+      "test_eval": {"sec": 45.2, "human": "45.2s"}
+    }
+  }
+}
+```
+
+| 输出位置 | 说明 |
+| -------- | ---- |
+| `{run_dir}/timing.json` | 训练 + 测试完整计时 |
+| `{run_dir}/visualizations/timing.json` | 测试阶段复制一份，便于与报告一起归档 |
+| `{run_dir}/visualizations/summary_report.json` | 含 `timing` 字段，指标与计时合一 |
+
+**汇总所有 run（汇报用 CSV）**：
+
+```bash
+# 汇总 outputs/ 下全部 timing.json
+python run.py collect-timing
+
+# 按方案 / 数据集筛选
+python run.py collect-timing --scheme mlp --dataset single
+python run.py collect-timing --scheme dim_guided --dataset F404
+python run.py collect-timing --scheme dim_unet --dataset single
+```
+
+生成文件：
+
+- `outputs/timing_summary.json` — 全部 run 的 JSON 列表
+- `outputs/timing_summary.csv` — 表格（scheme、dataset、train/test 耗时、AE/扩散分阶段秒数）
+- `outputs/timing_comparison.png` — 各方案各阶段耗时对比图（同一 scheme/dataset 取最新 run）
 
 ### `test` 子命令输出
 
@@ -93,7 +160,7 @@ python run.py test --scheme dim_guided --run-dir outputs/dim_guided/single/{time
 
 | 文件 | 说明 |
 | ---- | ---- |
-| `summary_report.json` | AE 门控、扩散 L1 指标、已复制 artifact 列表 |
+| `summary_report.json` | AE 门控、扩散 L1 指标、计时、已复制 artifact 列表 |
 | `ae_training_dashboard.png` 等 | 从 AE 阶段复制的训练曲线与重建图 |
 | `diff_grid_test.png` 等 | 从扩散阶段复制的生成网格与指标图 |
 | `test_generation_l1.png` | 逐样本生成 L1 vs 原始 SDF |
@@ -120,9 +187,18 @@ outputs/pca_unet/single/20260529_120000/
 
 outputs/dim_guided/single/20260530_153231/
 ├── logs/train.log
+├── timing.json                 # 训练/测试耗时统计
 ├── condition_applicability.json   # 五维条件适用性评估报告
 ├── autoencoder/
 ├── diffusion/
+└── visualizations/
+
+outputs/dim_unet/single/20260530_180000/
+├── logs/train.log
+├── timing.json
+├── condition_applicability.json   # 与 dim_guided 相同的五维条件适用性报告
+├── autoencoder/                   # 轮缘加权 AE（含 rim / gradient 损失）
+├── diffusion/                     # PCA(192) 网格 + 条件 UNet 权重与生成可视化
 └── visualizations/
 ```
 
@@ -133,7 +209,8 @@ meri-fid-gate/
 ├── run.py                      # 统一入口
 ├── scripts/
 │   ├── prepare_splits.py       # 生成固定 train/test 划分
-│   └── split_utils.py
+│   ├── split_utils.py
+│   └── timing_utils.py         # 训练/测试计时与 collect-timing 汇总
 ├── data/
 │   ├── single/dataset.json
 │   └── F404/dataset.json
@@ -149,9 +226,15 @@ meri-fid-gate/
 │   │   ├── config/
 │   │   ├── pipeline.py
 │   │   └── ...
-│   └── dim_guided/             # 尺寸引导扩散方案（独立代码）
+│   ├── dim_guided/             # 尺寸引导 MLP 扩散（独立代码）
+│   │   ├── config/
+│   │   ├── data/condition_vector.py
+│   │   ├── pipeline.py
+│   │   └── ...
+│   └── dim_unet/               # 尺寸 UNet 扩散（独立代码）
 │       ├── config/
 │       ├── data/condition_vector.py
+│       ├── models/pca_unet.py
 │       ├── pipeline.py
 │       └── ...
 └── outputs/{scheme}/{dataset}/{timestamp}/
@@ -261,6 +344,79 @@ python run.py test --scheme dim_guided --run-dir outputs/dim_guided/single/{time
 
 配置文件位于 `schemes/dim_guided/config/{dataset}.json`，其中 `condition_validation` 段可调整适用性判定阈值（`min_std_ratio`、`min_abs_std`）。
 
+## dim_unet 方案（尺寸 UNet 扩散）
+
+`dim_unet` 结合 **dim_guided** 的 ConditionVector 数据链路与 **pca_unet** 的条件 UNet 去噪器，在 PCA 网格潜空间上以 5 维尺寸参数为条件做扩散生成。
+
+### 训练流程
+
+1. **条件适用性校验** — 评估五维 ConditionVector 是否适合作为扩散条件，写入 `condition_applicability.json`
+2. **自编码器** — 轮缘加权 AE（含 `rim`、`gradient` 损失）将 SDF 编码为 `z_m`
+3. **PCA + UNet 扩散** — 将 `z_m` 经 PCA(192) 投影后重塑为 2D 网格，用条件 UNet 学习 DDPM 去噪
+4. **采样与解码** — DDIM 采样 → PCA 逆变换 → AE 解码为子午线 SDF
+
+### 与相关方案对比
+
+| 对比项 | pca_unet | dim_guided | dim_unet |
+| ------ | -------- | ---------- | -------- |
+| 去噪器 | 条件 UNet（PCA 网格） | MLP | 条件 UNet（PCA 网格） |
+| 条件输入 | 索引 CSV 五维列 | ConditionVector（Excel/NPZ/CSV） | 同 dim_guided |
+| AE 损失 | 标准 L1/L2/零等值面 | 轮缘加权 + gradient | 同 dim_guided |
+| 适用性校验 | 无 | 有 | 有 |
+| PCA 维度 | 128 | 192 | 192 |
+| 配置段名 | `unet` | `diffusion` | `unet` |
+| 分阶段 `--stage` | `unet` | `diff` | `unet` |
+
+### ConditionVector
+
+五维参数、加载优先级、Excel 配置与适用性判定规则与 **dim_guided 完全相同**（见上一节）。`dim_unet` 在 `schemes/dim_unet/data/condition_vector.py` 中独立维护一份相同接口的实现。
+
+编程接口示例：
+
+```python
+from schemes.dim_unet.data import CONDITION_COLUMNS
+from schemes.dim_unet.data.condition_vector import (
+    load_from_excel,
+    load_from_npz,
+    load_condition_vector,
+    evaluate_applicability,
+)
+
+cv = load_condition_vector("sample_001", index_row=row, npz_path=Path("sample_001.npz"))
+report = evaluate_applicability(train_df, condition_columns=CONDITION_COLUMNS)
+```
+
+### 配置说明
+
+配置文件位于 `schemes/dim_unet/config/{dataset}.json`：
+
+| 配置段 | 说明 |
+| ------ | ---- |
+| `autoencoder` | AE 结构与损失权重（含 `rim`、`gradient`） |
+| `latent_gate` | 潜空间质量门控阈值 |
+| `unet` | 扩散超参：`pca_dim`（192）、`unet_base_ch`、`timesteps`、`sample_steps`（80）、CFG 等 |
+| `condition_validation` | 适用性判定阈值（`min_std_ratio`、`min_abs_std`） |
+| `physics_guidance` | 可选物理引导（默认关闭） |
+
+与 `pca_unet` 的主要差异：`pca_dim=192`（保留更多潜空间变化方向）、`sample_steps=80`，且 AE 使用轮缘加权损失。
+
+### 使用命令
+
+```bash
+# 全流程训练（含适用性校验 → AE → UNet 扩散）
+python run.py train --scheme dim_unet --dataset single
+python run.py train --scheme dim_unet --dataset F404 --fast
+
+# 分阶段（扩散阶段用 --stage unet，与 pca_unet 相同）
+python run.py train --scheme dim_unet --dataset single --stage ae
+python run.py train --scheme dim_unet --dataset single --stage unet \
+  --ae-run-dir outputs/dim_unet/single/{timestamp}/autoencoder
+
+# 测试 / 可视化
+python run.py test --scheme dim_unet --run-dir outputs/dim_unet/single/{timestamp}
+python run.py test --scheme dim_unet --run-dir outputs/dim_unet/F404/{timestamp}
+```
+
 ## 添加新方案
 
 1. 在 `schemes/` 下新建目录（如 `schemes/my_scheme/`），复制并独立维护全套代码
@@ -326,14 +482,16 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 
 ### 4. PCA-UNet 去噪器（ConditionalUNet）
 
+用于 `pca_unet` 与 `dim_unet` 方案。`pca_unet` 默认 `pca_dim=128`；`dim_unet` 使用 `pca_dim=192`，保留更多潜空间主成分。
+
 **架构设计**：
 
-- **PCA → 网格化**：128 维向量 reshape 为 1×8×16 网格
+- **PCA → 网格化**：k 维 PCA 系数自动分解为 C×H×W 网格（优先接近正方形、H/W 为 4 的倍数以适配两次 stride=2 下采样）
 - **Encoder-Decoder UNet**：
   - Encoder：3层下采样（Conv + GroupNorm + SiLU）
   - Decoder：3层上采样（Upsample + Conv + GroupNorm + SiLU）
   - Skip Connection：保留空间细节
-- **条件注入**：工况向量广播到空间维度后与噪声 latent 拼接
+- **条件注入**：5 维工况向量（`dim_unet` 来自 ConditionVector）广播到空间维度后与噪声 latent 拼接
 
 ### 5. 质量门控（LatentRepresentationGate）
 
@@ -378,8 +536,8 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 **条件向量来源**：
 
 1. `meridian_index.csv` / `train_split.csv`：直接包含 5 维工况列
-2. `param_table.csv` 或 `.xlsx`：参数表补全缺失列（`dim_guided` 方案支持 Excel）
-3. NPZ 内 `condition_json` 或 `engineering_curves_json` 推导（`dim_guided` 方案）
+2. `param_table.csv` 或 `.xlsx`：参数表补全缺失列（`dim_guided` / `dim_unet` 方案支持 Excel）
+3. NPZ 内 `condition_json` 或 `engineering_curves_json` 推导（`dim_guided` / `dim_unet` 方案）
 4. `condition_specs.jsonl`：从几何规格推导工况
 
 ### 训练/测试划分
@@ -473,12 +631,14 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 | `min_latent_std` | 0.05 | 最小潜空间标准差阈值   |
 | `min_pass_ratio` | 0.85 | 最小样本通过率阈值    |
 
-### UNet 参数（PCA-UNet 方案）
+### UNet 参数（pca_unet / dim_unet 方案）
 
-| 参数             | 默认值 | 说明         |
-| -------------- | --- | ---------- |
-| `unet_base_ch` | 64  | UNet 基础通道数 |
-| `time_dim`     | 128 | 时间嵌入维度     |
+| 参数             | pca_unet 默认 | dim_unet 默认 | 说明         |
+| -------------- | ----------- | ----------- | ---------- |
+| `pca_dim`      | 128         | 192         | PCA 压缩维度   |
+| `unet_base_ch` | 64          | 64          | UNet 基础通道数 |
+| `sample_steps` | 50          | 80          | DDIM 采样步数  |
+| `time_dim`     | 128         | 128         | 时间嵌入维度     |
 
 ## 参考指标（single 数据集）
 
@@ -487,3 +647,4 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 | MLP      | \~0.036       | \~0.008  |
 | PCA-UNet | \~0.014       | \~0.008  |
 | dim_guided | 待补充         | \~0.008  |
+| dim_unet   | 待补充         | \~0.008  |
