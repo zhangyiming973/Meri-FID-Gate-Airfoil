@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
 SCHEMES = {
     "mlp": "schemes.mlp.pipeline",
     "pca_unet": "schemes.pca_unet.pipeline",
+    "dim_guided": "schemes.dim_guided.pipeline",
 }
 
 
@@ -90,7 +91,7 @@ def main() -> None:
 
     # --- 训练 ---
     train = sub.add_parser("train", help="Train autoencoder + diffusion for a scheme")
-    train.add_argument("--scheme", required=True, choices=list(SCHEMES), help="mlp or pca_unet")
+    train.add_argument("--scheme", required=True, choices=list(SCHEMES), help="mlp, pca_unet, or dim_guided")
     train.add_argument("--dataset", required=True, help="Dataset name, e.g. single or F404")
     train.add_argument(
         "--stage",

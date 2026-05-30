@@ -16,10 +16,11 @@
 
 每个扩散方案代码**完全独立**，位于 `schemes/` 下，配置放在各自 `config/` 目录：
 
-| 方案       | `--scheme` | 目录                  | 去噪器                  |
-| -------- | ---------- | ------------------- | -------------------- |
-| MLP 扩散   | `mlp`      | `schemes/mlp/`      | PCA(128) + MLP       |
-| PCA-UNet | `pca_unet` | `schemes/pca_unet/` | PCA(128) → 网格 + UNet |
+| 方案           | `--scheme`   | 目录                      | 去噪器                  |
+| ------------ | ------------ | ----------------------- | -------------------- |
+| MLP 扩散       | `mlp`        | `schemes/mlp/`          | PCA(128) + MLP       |
+| PCA-UNet     | `pca_unet`   | `schemes/pca_unet/`     | PCA(128) → 网格 + UNet |
+| 尺寸引导扩散     | `dim_guided` | `schemes/dim_guided/`   | PCA(128) + MLP + ConditionVector 校验 |
 
 ## 数据集与固定划分
 
@@ -60,7 +61,11 @@ python run.py train --scheme mlp --dataset F404
 # 2. 训练 — PCA-UNet 方案 + single 数据集
 python run.py train --scheme pca_unet --dataset single
 
-# 3. 分阶段训练
+# 3. 训练 — dim_guided 方案（Excel/NPZ ConditionVector + 适用性校验）
+python run.py train --scheme dim_guided --dataset single
+python run.py train --scheme dim_guided --dataset F404 --fast
+
+# 4. 分阶段训练
 python run.py train --scheme mlp --dataset F404 --stage ae
 python run.py train --scheme mlp --dataset F404 --stage diff \
   --ae-run-dir outputs/mlp/F404/{timestamp}/autoencoder
@@ -68,12 +73,16 @@ python run.py train --scheme mlp --dataset F404 --stage diff \
 python run.py train --scheme pca_unet --dataset F404 --stage unet \
   --ae-run-dir outputs/pca_unet/F404/{timestamp}/autoencoder
 
-# 4. 快速冒烟
+python run.py train --scheme dim_guided --dataset single --stage diff \
+  --ae-run-dir outputs/dim_guided/single/{timestamp}/autoencoder
+
+# 5. 快速冒烟
 python run.py train --scheme mlp --dataset F404 --fast
 
-# 5. 测试 / 可视化（聚合 AE + 扩散产物，替代旧 visualize.py）
+# 6. 测试 / 可视化（聚合 AE + 扩散产物，替代旧 visualize.py）
 python run.py test --scheme mlp --run-dir outputs/mlp/F404/{timestamp}
 python run.py test --scheme pca_unet --run-dir outputs/pca_unet/F404/{timestamp}
+python run.py test --scheme dim_guided --run-dir outputs/dim_guided/single/{timestamp}
 ```
 
 配置文件自动从 `schemes/{scheme}/config/{dataset}.json` 读取，无需手动指定 `--config`。
@@ -108,6 +117,13 @@ outputs/pca_unet/single/20260529_120000/
 ├── autoencoder/
 ├── diffusion/
 └── visualizations/
+
+outputs/dim_guided/single/20260530_153231/
+├── logs/train.log
+├── condition_applicability.json   # 五维条件适用性评估报告
+├── autoencoder/
+├── diffusion/
+└── visualizations/
 ```
 
 ## 项目结构
@@ -129,8 +145,13 @@ meri-fid-gate/
 │   │   ├── models/
 │   │   ├── train/
 │   │   └── ...
-│   └── pca_unet/               # PCA-UNet 方案（独立代码）
+│   ├── pca_unet/               # PCA-UNet 方案（独立代码）
+│   │   ├── config/
+│   │   ├── pipeline.py
+│   │   └── ...
+│   └── dim_guided/             # 尺寸引导扩散方案（独立代码）
 │       ├── config/
+│       ├── data/condition_vector.py
 │       ├── pipeline.py
 │       └── ...
 └── outputs/{scheme}/{dataset}/{timestamp}/
@@ -148,6 +169,97 @@ F404 需在 `data/F404/dataset.json` 中设置：
 
 - `split.filter_passed_quality: false`（当前全部 `passed_quality=False`）
 - `condition_specs_file`（自动从 JSONL 补齐 5 维条件列）
+
+## dim_guided 方案（尺寸引导扩散）
+
+`dim_guided` 在潜空间条件扩散基础上，增加了 **ConditionVector** 的统一读取与适用性校验，支持从 Excel、NPZ、CSV 索引多级回退加载五维尺寸参数。
+
+### 五维 ConditionVector
+
+| 字段 | 含义 |
+| ---- | ---- |
+| `hub_r_end_mm` | 轮毂外径半径 (mm) |
+| `rim_r_start_mm` | 轮缘内径半径 (mm) |
+| `angle_web_deg` | 腹板倾角 (°) |
+| `r_trans_bore_web_mm` | 孔-腹板过渡半径 (mm) |
+| `z_min` | 轴向下界 (mm) |
+
+### 条件加载优先级
+
+1. `train_split.csv` / `test_split.csv` 索引行中的条件列
+2. 内存参数表（CSV 或 Excel）
+3. `dataset.json` 中配置的 Excel/CSV 参数表路径
+4. NPZ 内 `condition_json`，或从 `engineering_curves_json` 推导
+
+**Excel 配置示例**（在 `data/{dataset}/dataset.json` 中添加）：
+
+```json
+{
+  "param_table_path": "data/my_dataset/processed/param_table.csv",
+  "condition_excel_path": "data/my_dataset/processed/params.xlsx"
+}
+```
+
+Excel / CSV 参数表需包含 `sample_id`（或 `id`）列，以及五维条件列。支持列名别名，例如 `r_bore2_mm` → `hub_r_end_mm`、`r_outer2_mm` → `rim_r_start_mm`。
+
+### 编程接口
+
+```python
+from schemes.dim_guided.data.condition_vector import (
+    load_from_excel,
+    load_from_npz,
+    load_condition_vector,
+    evaluate_applicability,
+)
+
+# 从 Excel 读取单样本
+cv = load_from_excel("params.xlsx", sample_id="sample_001")
+print(cv.as_dict())  # {'hub_r_end_mm': 122.03, ...}
+
+# 从 NPZ 读取（需含 condition_json 或可推导的 engineering_curves_json）
+cv = load_from_npz("sample_001.npz")
+
+# 多级回退加载
+cv = load_condition_vector("sample_001", index_row=row, npz_path=Path("sample_001.npz"))
+```
+
+### 适用性校验
+
+训练开始前自动评估条件列是否适合作为扩散条件，结果写入 `condition_applicability.json`：
+
+- 各列缺失率
+- 各列标准差与取值范围
+- 低方差列（近常量，CFG 区分度不足）
+- 物理约束违反样本数
+
+**数据集参考结论**：
+
+| 数据集 | 适用性 | 说明 |
+| ------ | ------ | ---- |
+| `single` | 适用 | 五维均有足够方差 |
+| `F404` | 部分适用 | `hub_r_end_mm`、`r_trans_bore_web_mm` 为常量；主要依赖 `rim_r_start_mm`、`angle_web_deg`、`z_min` |
+
+F404 的 NPZ 文件当前不含 `condition_json`，需通过索引 CSV 或 Excel 参数表提供条件。
+
+### 使用命令
+
+```bash
+# 全流程训练（含适用性校验 → AE → 扩散）
+python run.py train --scheme dim_guided --dataset single
+
+# 分阶段
+python run.py train --scheme dim_guided --dataset single --stage ae
+python run.py train --scheme dim_guided --dataset single --stage diff \
+  --ae-run-dir outputs/dim_guided/single/{timestamp}/autoencoder
+
+# 快速冒烟（15 epoch AE + 20 epoch 扩散）
+python run.py train --scheme dim_guided --dataset single --fast
+
+# 测试 / 可视化
+python run.py test --scheme dim_guided --run-dir outputs/dim_guided/single/{timestamp}
+```
+
+配置文件位于 `schemes/dim_guided/config/{dataset}.json`，其中 `condition_validation` 段可调整适用性判定阈值（`min_std_ratio`、`min_abs_std`）。
 
 ## 添加新方案
 
@@ -265,9 +377,10 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 
 **条件向量来源**：
 
-1. `meridian_index.csv`：直接包含 5 维工况列
-2. `param_table.csv`：参数表补全缺失列
-3. `condition_specs.jsonl`：从几何规格推导工况
+1. `meridian_index.csv` / `train_split.csv`：直接包含 5 维工况列
+2. `param_table.csv` 或 `.xlsx`：参数表补全缺失列（`dim_guided` 方案支持 Excel）
+3. NPZ 内 `condition_json` 或 `engineering_curves_json` 推导（`dim_guided` 方案）
+4. `condition_specs.jsonl`：从几何规格推导工况
 
 ### 训练/测试划分
 
@@ -373,5 +486,4 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 | -------- | ------------- | -------- |
 | MLP      | \~0.036       | \~0.008  |
 | PCA-UNet | \~0.014       | \~0.008  |
-
-#
+| dim_guided | 待补充         | \~0.008  |
