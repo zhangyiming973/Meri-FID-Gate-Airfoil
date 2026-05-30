@@ -1,0 +1,50 @@
+{
+  "dataset": "single",
+  "autoencoder": {
+    "in_channels": 2,
+    "latent_channels": 64,
+    "latent_spatial": 16,
+    "epochs": 80,
+    "batch_size": 8,
+    "lr": 0.0003,
+    "use_semantic": true,
+    "loss_weights": {
+      "l1": 1.0,
+      "l2": 0.5,
+      "zero_level": 2.0,
+      "zero_sigma_mm": 1.5,
+      "dimension": 0.3,
+      "semantic": 0.2,
+      "rim": 2.0,
+      "gradient": 0.8
+    }
+  },
+  "latent_gate": {
+    "max_recon_l1": 0.08,
+    "min_latent_std": 0.05,
+    "min_pass_ratio": 0.85
+  },
+  "unet": {
+    "pca_dim": 192,
+    "unet_base_ch": 64,
+    "timesteps": 200,
+    "epochs": 200,
+    "batch_size": 16,
+    "lr": 0.0003,
+    "cfg_dropout": 0.2,
+    "cfg_scale": 1.5,
+    "sample_steps": 80,
+    "use_ddim": true
+  },
+  "physics_guidance": {
+    "enabled": false,
+    "weight": 0.02,
+    "sigma_vm_limit": 103000.0
+  },
+  "condition_validation": {
+    "min_std_ratio": 0.01,
+    "min_abs_std": 1e-6
+  },
+  "device": "cuda",
+  "num_workers": 0
+}
