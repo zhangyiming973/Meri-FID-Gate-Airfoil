@@ -33,6 +33,7 @@ SCHEMES = {
     "dim_guided": "schemes.dim_guided.pipeline",
     "dim_unet": "schemes.dim_unet.pipeline",
     "edm_guided": "schemes.edm_guided.pipeline",
+    "pidm_guided": "schemes.pidm_guided.pipeline",
 }
 
 
@@ -154,7 +155,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # 阶段别名归一化：mlp 无 UNet，unet 等价于 diff
-    if args.command == "train" and args.stage == "unet" and args.scheme in ("mlp", "dim_guided"):
+    if args.command == "train" and args.stage == "unet" and args.scheme in ("mlp", "dim_guided", "edm_guided", "pidm_guided"):
         args.stage = "diff"
     if args.command == "train" and args.stage == "diff" and args.scheme in ("pca_unet", "dim_unet"):
         pass  # diff / unet 均为 UNet 扩散阶段

@@ -23,6 +23,7 @@
 | 尺寸引导扩散     | `dim_guided` | `schemes/dim_guided/`   | PCA(128) + MLP + ConditionVector 校验 |
 | 尺寸 UNet 扩散   | `dim_unet`   | `schemes/dim_unet/`     | PCA(192) + UNet + ConditionVector 校验 |
 | EDM 扩散引导     | `edm_guided` | `schemes/edm_guided/`   | PCA(128) + EDM 预条件化 MLP + Heun 采样 |
+| PIDM 物理信息扩散 | `pidm_guided` | `schemes/pidm_guided/` | PCA(128) + MLP + 几何残差虚拟似然（[PIDM](https://github.com/jhbastek/PhysicsInformedDiffusionModels)） |
 
 ## 数据集与固定划分
 
@@ -85,6 +86,13 @@ python run.py train --scheme dim_guided --dataset single --stage diff \
 python run.py train --scheme dim_unet --dataset single --stage unet \
   --ae-run-dir outputs/dim_unet/single/{timestamp}/autoencoder
 
+# 4b. 训练 — pidm_guided 方案（PIDM 风格几何残差虚拟似然）
+python run.py train --scheme pidm_guided --dataset single
+python run.py train --scheme pidm_guided --dataset F404 --fast
+
+python run.py train --scheme pidm_guided --dataset single --stage diff \
+  --ae-run-dir outputs/pidm_guided/single/{timestamp}/autoencoder
+
 # 5. 快速冒烟
 python run.py train --scheme mlp --dataset F404 --fast
 
@@ -93,6 +101,7 @@ python run.py test --scheme mlp --run-dir outputs/mlp/F404/{timestamp}
 python run.py test --scheme pca_unet --run-dir outputs/pca_unet/F404/{timestamp}
 python run.py test --scheme dim_guided --run-dir outputs/dim_guided/single/{timestamp}
 python run.py test --scheme dim_unet --run-dir outputs/dim_unet/single/{timestamp}
+python run.py test --scheme pidm_guided --run-dir outputs/pidm_guided/single/{timestamp}
 ```
 
 配置文件自动从 `schemes/{scheme}/config/{dataset}.json` 读取，无需手动指定 `--config`。
@@ -147,6 +156,7 @@ python run.py collect-timing
 python run.py collect-timing --scheme mlp --dataset single
 python run.py collect-timing --scheme dim_guided --dataset F404
 python run.py collect-timing --scheme dim_unet --dataset single
+python run.py collect-timing --scheme pidm_guided --dataset single
 ```
 
 生成文件：
@@ -168,6 +178,8 @@ python run.py collect-timing --scheme dim_unet --dataset single
 | `test_ae_recon_l1.png` | 逐样本 AE 重建 L1 vs 原始 SDF |
 | `test_gen_vs_ae_recon.png` | 生成 vs AE 重建并排对比 |
 | `generations/` | 各测试样本 SDF 三联图副本 |
+
+`pidm_guided` 方案的 `summary_report.json` 额外包含 `mean_physics_residual`（几何残差均值）与 `pidm_config.json` 副本。
 
 ## 输出目录
 
@@ -201,6 +213,15 @@ outputs/dim_unet/single/20260530_180000/
 ├── autoencoder/                   # 轮缘加权 AE（含 rim / gradient 损失）
 ├── diffusion/                     # PCA(192) 网格 + 条件 UNet 权重与生成可视化
 └── visualizations/
+
+outputs/pidm_guided/single/20260531_124746/
+├── logs/train.log
+├── timing.json
+├── autoencoder/
+├── diffusion/
+│   ├── pidm_config.json           # PIDM 超参与残差分量说明
+│   └── generation_metrics.json    # 含 mean_physics_residual
+└── visualizations/
 ```
 
 ## 项目结构
@@ -232,15 +253,21 @@ meri-fid-gate/
 │   │   ├── data/condition_vector.py
 │   │   ├── pipeline.py
 │   │   └── ...
-│   └── dim_unet/               # 尺寸 UNet 扩散（独立代码）
+│   ├── dim_unet/               # 尺寸 UNet 扩散（独立代码）
+│   │   ├── config/
+│   │   ├── data/condition_vector.py
+│   │   ├── models/pca_unet.py
+│   │   ├── pipeline.py
+│   │   └── ...
+│   ├── edm_guided/             # EDM 扩散引导（独立代码）
+│   │   ├── config/
+│   │   ├── models/edm_schedule.py
+│   │   ├── pipeline.py
+│   │   └── ...
+│   └── pidm_guided/            # PIDM 物理信息扩散（独立代码）
 │       ├── config/
-│       ├── data/condition_vector.py
-│       ├── models/pca_unet.py
-│       ├── pipeline.py
-│       └── ...
-│   └── edm_guided/             # EDM 扩散引导（独立代码）
-│       ├── config/
-│       ├── models/edm_schedule.py
+│       ├── physics/            # 几何残差 + 虚拟似然损失
+│       ├── models/diffusion.py # 含 posterior_variance 与 x0 校正
 │       ├── pipeline.py
 │       └── ...
 └── outputs/{scheme}/{dataset}/{timestamp}/
@@ -455,6 +482,91 @@ python run.py test --scheme edm_guided --run-dir outputs/edm_guided/single/{time
 
 配置文件位于 `schemes/edm_guided/config/{dataset}.json`，`edm` 段控制 EDM 超参（`sigma_data` 为 null 时从训练集 PCA 编码自动估计）。
 
+## pidm_guided 方案（PIDM 物理信息扩散）
+
+基于 [Physics-Informed Diffusion Models (PIDM, ICLR 2025)](https://github.com/jhbastek/PhysicsInformedDiffusionModels) 的损失设计，在 **PCA 潜空间 MLP 扩散** 上引入**几何残差虚拟似然**，使生成样本趋近独立物理约束（而非对齐 GT 风险代理）。
+
+详细对比分析见 [`report.md`](report.md)。
+
+### 与 PIDM 原版的对应关系
+
+| PIDM 原版 | `pidm_guided` 适配 |
+| --------- | ------------------ |
+| Darcy / FEM PDE 残差 → 0 | 壁厚违反 + Eikonal 残差 → 0 |
+| `-c_residual · log p(r=0 \| x₀, var_t)` | 同样形式，方差绑定 `posterior_variance_clipped[t]` |
+| 场空间 64×64 直接扩散 | AE 潜空间 PCA(128) + MLP（计算更高效） |
+| 推理 N/M 步 x₀ 校正 | 可选 `n_correction` / `m_correction` |
+
+### 训练损失
+
+\[
+\mathcal{L} = c_\text{data} \cdot \mathcal{L}_\text{DDPM} + c_\text{residual} \cdot \big(-\log p(r=0 \mid \hat{x}_0, \text{var}_t)\big)
+\]
+
+- 从预测噪声反推 \(\hat{x}_0\)，经 PCA 逆变换 + AE 解码得到 SDF
+- 在 SDF 上计算几何残差（目标为 0，非对齐 GT）
+- 前 `warmup_frac`（默认 33%）epoch 仅训练 DDPM，之后启用物理项
+
+**残差分量**（见 `schemes/pidm_guided/physics/geometry_residual.py`）：
+
+| 分量 | 说明 |
+| ---- | ---- |
+| `thickness_violation` | `ReLU(min_thickness_mm - 估计壁厚)` |
+| `eikonal` | SDF Eikonal 条件 `\|∇SDF\| ≈ 1`（有限差分，权重 `eikonal_weight`） |
+| `area_deviation` | 可选，与 NPZ `physics.area_mm2` 对齐（`use_area_constraint: true`） |
+
+### 与 `mlp` 方案对比
+
+| 对比项 | `mlp` | `pidm_guided` |
+| ------ | ----- | ------------- |
+| 去噪器 | PCA(128) + MLP | 同左 |
+| 扩散框架 | DDPM + DDIM + CFG | 同左 |
+| 物理引导 | `physics_guidance`（默认关，MSE 对齐 GT 风险） | PIDM 虚拟似然（默认开，残差 → 0） |
+| 推理校正 | 无 | 可选 x₀ 梯度校正 |
+| 评估指标 | gen L1 | gen L1 + `mean_physics_residual` |
+
+### 配置说明
+
+配置文件位于 `schemes/pidm_guided/config/{dataset}.json`：
+
+| 配置段 | 说明 |
+| ------ | ---- |
+| `autoencoder` | 与 `mlp` 相同 |
+| `latent_gate` | 潜空间质量门控 |
+| `diffusion` | MLP 扩散超参（`pca_dim`、`timesteps`、CFG 等） |
+| `pidm` | PIDM 专用超参（见下表） |
+
+**`pidm` 段主要参数**：
+
+| 参数 | 默认值 | 说明 |
+| ---- | ------ | ---- |
+| `c_data` | 1.0 | DDPM 噪声损失权重 |
+| `c_residual` | 0.001 | 残差虚拟似然权重（0 则退化为纯 DDPM） |
+| `warmup_frac` | 0.33 | 前若干 epoch 仅训 DDPM |
+| `min_thickness_mm` | 2.0 | 最小壁厚约束 (mm) |
+| `use_eikonal` | true | 是否启用 Eikonal 残差 |
+| `eikonal_weight` | 0.1 | Eikonal 残差缩放 |
+| `use_area_constraint` | false | 是否约束截面积 |
+| `n_correction` | 0 | DDIM 采样每步 x₀ 梯度校正次数 |
+| `m_correction` | 0 | 末步 x₀ 梯度校正次数 |
+| `correction_step_size` | 0.05 | 校正步长 |
+
+### 使用命令
+
+```bash
+# 全流程训练
+python run.py train --scheme pidm_guided --dataset single
+python run.py train --scheme pidm_guided --dataset F404 --fast
+
+# 分阶段（扩散阶段用 --stage diff，与 mlp 相同）
+python run.py train --scheme pidm_guided --dataset single --stage ae
+python run.py train --scheme pidm_guided --dataset single --stage diff \
+  --ae-run-dir outputs/pidm_guided/single/{timestamp}/autoencoder
+
+# 测试 / 可视化（含 physics_residual 指标）
+python run.py test --scheme pidm_guided --run-dir outputs/pidm_guided/single/{timestamp}
+```
+
 ## 添加新方案
 
 1. 在 `schemes/` 下新建目录（如 `schemes/my_scheme/`），复制并独立维护全套代码
@@ -557,8 +669,9 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
     ```
 - **DDIM 采样**：加速推理（50 步而非 200 步）
 - **物理引导（可选）**：
-  - 在采样过程中加入应力约束
-  - 权重：0.02，sigma\_vm\_limit：103000
+  - `mlp` / `dim_*` 等方案：`physics_guidance` 对齐 GT 风险代理（默认关闭）
+  - `pidm_guided` 方案：PIDM 虚拟似然，几何残差目标为 0（默认 `c_residual=0.001`）
+  - 详见 [`report.md`](report.md) 与 `schemes/pidm_guided/physics/`
 
 ## 数据流详解
 
@@ -678,11 +791,24 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 | `sample_steps` | 50          | 80          | DDIM 采样步数  |
 | `time_dim`     | 128         | 128         | 时间嵌入维度     |
 
+### PIDM 参数（pidm_guided 方案）
+
+| 参数 | 默认值 | 说明 |
+| ---- | ------ | ---- |
+| `c_data` | 1.0 | DDPM 损失权重 |
+| `c_residual` | 0.001 | 残差虚拟似然权重 |
+| `warmup_frac` | 0.33 | 物理项 warmup 比例 |
+| `min_thickness_mm` | 2.0 | 最小壁厚约束 |
+| `use_eikonal` | true | Eikonal 残差开关 |
+| `n_correction` | 0 | 采样 x₀ 校正步数 |
+
 ## 参考指标（single 数据集）
 
-| 方案       | mean\_gen\_l1 | AE 重建 L1 |
-| -------- | ------------- | -------- |
-| MLP      | \~0.036       | \~0.008  |
-| PCA-UNet | \~0.014       | \~0.008  |
-| dim_guided | 待补充         | \~0.008  |
-| dim_unet   | 待补充         | \~0.008  |
+| 方案       | mean\_gen\_l1 | AE 重建 L1 | 备注 |
+| -------- | ------------- | -------- | ---- |
+| MLP      | \~0.036       | \~0.008  | |
+| PCA-UNet | \~0.014       | \~0.008  | |
+| dim_guided | 待补充         | \~0.008  | |
+| dim_unet   | 待补充         | \~0.008  | |
+| edm_guided | 待补充         | \~0.008  | |
+| pidm_guided | \~0.049（fast 20ep） | \~0.024 | 另报 `mean_physics_residual` \~0.049 |
