@@ -486,7 +486,7 @@ python run.py test --scheme edm_guided --run-dir outputs/edm_guided/single/{time
 
 基于 [Physics-Informed Diffusion Models (PIDM, ICLR 2025)](https://github.com/jhbastek/PhysicsInformedDiffusionModels) 的损失设计，在 **PCA 潜空间 MLP 扩散** 上引入**几何残差虚拟似然**，使生成样本趋近独立物理约束（而非对齐 GT 风险代理）。
 
-详细对比分析见 [`report.md`](report.md)。
+详细对比分析见 [`report.md`](schemes/pidm_guided/report.md)。
 
 ### 与 PIDM 原版的对应关系
 
