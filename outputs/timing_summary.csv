@@ -1,0 +1,16 @@
+scheme,dataset,run_id,train_total_sec,train_total_human,ae_sec,diffusion_sec,test_total_sec,test_total_human,run_dir
+dim_guided,F404,20260530_170454,,,,,0.795,0.8s,outputs/dim_guided/F404/20260530_170454
+dim_guided,F404,20260530_180547,529.192,8m 49.2s,355.614,173.506,,,/home/vipuser/project/meri-fid-gate/outputs/dim_guided/F404/20260530_180547
+dim_guided,single,20260530_173944,36.659,36.7s,36.624,,,,/home/vipuser/project/meri-fid-gate/outputs/dim_guided/single/20260530_173944
+dim_guided,single,20260531_141100,261.845,4m 21.8s,113.552,148.261,,,/home/vipuser/project/meri-fid-gate/outputs/dim_guided/single/20260531_141100
+dim_unet,F404,20260530_210524,1207.649,20m 7.6s,355.378,852.199,,,/home/vipuser/project/meri-fid-gate/outputs/dim_unet/F404/20260530_210524
+dim_unet,single,20260530_203951,36.278,36.3s,36.246,,,,/home/vipuser/project/meri-fid-gate/outputs/dim_unet/single/20260530_203951
+edm_guided,F404,20260531_114421,477.689,7m 57.7s,301.333,176.356,,,/home/vipuser/project/meri-fid-gate/outputs/edm_guided/F404/20260531_114421
+edm_guided,F404,20260531_121044,588.259,9m 48.3s,349.828,238.431,,,/home/vipuser/project/meri-fid-gate/outputs/edm_guided/F404/20260531_121044
+edm_guided,single,20260531_114153,33.648,33.6s,,33.648,,,/home/vipuser/project/meri-fid-gate/outputs/edm_guided/single/20260531_114153
+edm_guided,single,20260531_140241,324.098,5m 24.1s,112.155,211.943,,,/home/vipuser/project/meri-fid-gate/outputs/edm_guided/single/20260531_140241
+mlp,F404,20260530_183549,427.245,7m 7.2s,301.351,125.894,,,/home/vipuser/project/meri-fid-gate/outputs/mlp/F404/20260530_183549
+pca_unet,F404,20260530_184543,880.809,14m 40.8s,306.07,574.739,,,/home/vipuser/project/meri-fid-gate/outputs/pca_unet/F404/20260530_184543
+pidm_guided,F404,20260531_130949,547.309,9m 7.3s,301.778,245.531,,,/home/vipuser/project/meri-fid-gate/outputs/pidm_guided/F404/20260531_130949
+pidm_guided,single,20260531_124746,314.597,5m 14.6s,,314.597,0.8,0.8s,/home/vipuser/project/meri-fid-gate/outputs/pidm_guided/single/20260531_124746
+pidm_guided,single,20260531_135602,242.976,4m 3.0s,98.518,144.458,,,/home/vipuser/project/meri-fid-gate/outputs/pidm_guided/single/20260531_135602

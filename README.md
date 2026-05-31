@@ -1,8 +1,9 @@
 # Meridian SDF 尺寸引导潜空间扩散
 
-基于 `sdf2d` 子午面数据的**两阶段生成管线**：自编码器学习潜表示，再在潜空间上训练**尺寸条件扩散模型**。
+基于 `sdf2d` 子午面数据的**两阶段生成管线**：自编码器学习潜表示，再在潜空间上训练**尺寸条件扩散模型**。项目提供 **6 套独立方案**（`mlp` / `pca_unet` / `dim_guided` / `dim_unet` / `edm_guided` / `pidm_guided`），统一由 `run.py` 调度。
 
 ## 架构概览
+
 
 | 阶段      | 说明                                 |
 | ------- | ---------------------------------- |
@@ -10,20 +11,36 @@
 | 2. 质量门禁 | 校验重建质量与潜空间分布                       |
 | 3. 条件扩散 | 以 5 维设计参数为条件生成 `z_m`，再解码为 SDF      |
 
+
 **条件向量**：`hub_r_end_mm`、`rim_r_start_mm`、`angle_web_deg`、`r_trans_bore_web_mm`、`z_min`
 
 ## 方案与目录
 
 每个扩散方案代码**完全独立**，位于 `schemes/` 下，配置放在各自 `config/` 目录：
 
-| 方案           | `--scheme`   | 目录                      | 去噪器                  |
-| ------------ | ------------ | ----------------------- | -------------------- |
-| MLP 扩散       | `mlp`        | `schemes/mlp/`          | PCA(128) + MLP       |
-| PCA-UNet     | `pca_unet`   | `schemes/pca_unet/`     | PCA(128) → 网格 + UNet |
-| 尺寸引导扩散     | `dim_guided` | `schemes/dim_guided/`   | PCA(128) + MLP + ConditionVector 校验 |
-| 尺寸 UNet 扩散   | `dim_unet`   | `schemes/dim_unet/`     | PCA(192) + UNet + ConditionVector 校验 |
-| EDM 扩散引导     | `edm_guided` | `schemes/edm_guided/`   | PCA(128) + EDM 预条件化 MLP + Heun 采样 |
+
+| 方案          | `--scheme`    | 目录                     | 去噪器                                                                                           |
+| ----------- | ------------- | ---------------------- | --------------------------------------------------------------------------------------------- |
+| MLP 扩散      | `mlp`         | `schemes/mlp/`         | PCA(128) + MLP                                                                                |
+| PCA-UNet    | `pca_unet`    | `schemes/pca_unet/`    | PCA(128) → 网格 + UNet                                                                          |
+| 尺寸引导扩散      | `dim_guided`  | `schemes/dim_guided/`  | PCA(128) + MLP + ConditionVector 校验                                                           |
+| 尺寸 UNet 扩散  | `dim_unet`    | `schemes/dim_unet/`    | PCA(192) + UNet + ConditionVector 校验                                                          |
+| EDM 扩散引导    | `edm_guided`  | `schemes/edm_guided/`  | PCA(128) + EDM 预条件化 MLP + Heun 采样                                                             |
 | PIDM 物理信息扩散 | `pidm_guided` | `schemes/pidm_guided/` | PCA(128) + MLP + 几何残差虚拟似然（[PIDM](https://github.com/jhbastek/PhysicsInformedDiffusionModels)） |
+
+### 方案速查
+
+| 需求 | 推荐方案 | 扩散 `--stage` |
+| ---- | -------- | -------------- |
+| 基线 MLP 潜空间扩散 | `mlp` | `diff` |
+| 空间 UNet 去噪（更高精度） | `pca_unet` | `unet` |
+| Excel/NPZ 五维条件 + 适用性校验 | `dim_guided` | `diff` |
+| 上述条件 + UNet 去噪 | `dim_unet` | `unet` |
+| EDM 预条件化 + Heun 采样 | `edm_guided` | `diff` |
+| PIDM 几何残差虚拟似然 | `pidm_guided` | `diff` |
+
+> MLP 类方案（`mlp` / `dim_guided` / `edm_guided` / `pidm_guided`）传 `--stage unet` 时会自动归一化为 `diff`。
+
 
 ## 数据集与固定划分
 
@@ -93,14 +110,20 @@ python run.py train --scheme pidm_guided --dataset F404 --fast
 python run.py train --scheme pidm_guided --dataset single --stage diff \
   --ae-run-dir outputs/pidm_guided/single/{timestamp}/autoencoder
 
+python run.py train --scheme edm_guided --dataset single --stage diff \
+  --ae-run-dir outputs/edm_guided/single/{timestamp}/autoencoder
+
 # 5. 快速冒烟
 python run.py train --scheme mlp --dataset F404 --fast
+python run.py train --scheme edm_guided --dataset single --fast
+python run.py train --scheme pidm_guided --dataset single --fast
 
 # 6. 测试 / 可视化（聚合 AE + 扩散产物，替代旧 visualize.py）
 python run.py test --scheme mlp --run-dir outputs/mlp/F404/{timestamp}
 python run.py test --scheme pca_unet --run-dir outputs/pca_unet/F404/{timestamp}
 python run.py test --scheme dim_guided --run-dir outputs/dim_guided/single/{timestamp}
 python run.py test --scheme dim_unet --run-dir outputs/dim_unet/single/{timestamp}
+python run.py test --scheme edm_guided --run-dir outputs/edm_guided/single/{timestamp}
 python run.py test --scheme pidm_guided --run-dir outputs/pidm_guided/single/{timestamp}
 ```
 
@@ -140,11 +163,13 @@ python run.py test --scheme pidm_guided --run-dir outputs/pidm_guided/single/{ti
 }
 ```
 
-| 输出位置 | 说明 |
-| -------- | ---- |
-| `{run_dir}/timing.json` | 训练 + 测试完整计时 |
-| `{run_dir}/visualizations/timing.json` | 测试阶段复制一份，便于与报告一起归档 |
+
+| 输出位置                                           | 说明                    |
+| ---------------------------------------------- | --------------------- |
+| `{run_dir}/timing.json`                        | 训练 + 测试完整计时           |
+| `{run_dir}/visualizations/timing.json`         | 测试阶段复制一份，便于与报告一起归档    |
 | `{run_dir}/visualizations/summary_report.json` | 含 `timing` 字段，指标与计时合一 |
+
 
 **汇总所有 run（汇报用 CSV）**：
 
@@ -156,6 +181,7 @@ python run.py collect-timing
 python run.py collect-timing --scheme mlp --dataset single
 python run.py collect-timing --scheme dim_guided --dataset F404
 python run.py collect-timing --scheme dim_unet --dataset single
+python run.py collect-timing --scheme edm_guided --dataset single
 python run.py collect-timing --scheme pidm_guided --dataset single
 ```
 
@@ -169,15 +195,17 @@ python run.py collect-timing --scheme pidm_guided --dataset single
 
 `run.py test` 从 `autoencoder/` 与 `diffusion/` 读取训练阶段产物，汇总到 run 根目录 `visualizations/`：
 
-| 文件 | 说明 |
-| ---- | ---- |
-| `summary_report.json` | AE 门控、扩散 L1 指标、计时、已复制 artifact 列表 |
-| `ae_training_dashboard.png` 等 | 从 AE 阶段复制的训练曲线与重建图 |
-| `diff_grid_test.png` 等 | 从扩散阶段复制的生成网格与指标图 |
-| `test_generation_l1.png` | 逐样本生成 L1 vs 原始 SDF |
-| `test_ae_recon_l1.png` | 逐样本 AE 重建 L1 vs 原始 SDF |
-| `test_gen_vs_ae_recon.png` | 生成 vs AE 重建并排对比 |
-| `generations/` | 各测试样本 SDF 三联图副本 |
+
+| 文件                            | 说明                                |
+| ----------------------------- | --------------------------------- |
+| `summary_report.json`         | AE 门控、扩散 L1 指标、计时、已复制 artifact 列表 |
+| `ae_training_dashboard.png` 等 | 从 AE 阶段复制的训练曲线与重建图                |
+| `diff_grid_test.png` 等        | 从扩散阶段复制的生成网格与指标图                  |
+| `test_generation_l1.png`      | 逐样本生成 L1 vs 原始 SDF                |
+| `test_ae_recon_l1.png`        | 逐样本 AE 重建 L1 vs 原始 SDF            |
+| `test_gen_vs_ae_recon.png`    | 生成 vs AE 重建并排对比                   |
+| `generations/`                | 各测试样本 SDF 三联图副本                   |
+
 
 `pidm_guided` 方案的 `summary_report.json` 额外包含 `mean_physics_residual`（几何残差均值）与 `pidm_config.json` 副本。
 
@@ -267,6 +295,7 @@ meri-fid-gate/
 │   └── pidm_guided/            # PIDM 物理信息扩散（独立代码）
 │       ├── config/
 │       ├── physics/            # 几何残差 + 虚拟似然损失
+│       ├── report.md           # 与 PIDM 原版的对比分析
 │       ├── models/diffusion.py # 含 posterior_variance 与 x0 校正
 │       ├── pipeline.py
 │       └── ...
@@ -292,13 +321,15 @@ F404 需在 `data/F404/dataset.json` 中设置：
 
 ### 五维 ConditionVector
 
-| 字段 | 含义 |
-| ---- | ---- |
-| `hub_r_end_mm` | 轮毂外径半径 (mm) |
-| `rim_r_start_mm` | 轮缘内径半径 (mm) |
-| `angle_web_deg` | 腹板倾角 (°) |
+
+| 字段                    | 含义            |
+| --------------------- | ------------- |
+| `hub_r_end_mm`        | 轮毂外径半径 (mm)   |
+| `rim_r_start_mm`      | 轮缘内径半径 (mm)   |
+| `angle_web_deg`       | 腹板倾角 (°)      |
 | `r_trans_bore_web_mm` | 孔-腹板过渡半径 (mm) |
-| `z_min` | 轴向下界 (mm) |
+| `z_min`               | 轴向下界 (mm)     |
+
 
 ### 条件加载优先级
 
@@ -350,10 +381,12 @@ cv = load_condition_vector("sample_001", index_row=row, npz_path=Path("sample_00
 
 **数据集参考结论**：
 
-| 数据集 | 适用性 | 说明 |
-| ------ | ------ | ---- |
-| `single` | 适用 | 五维均有足够方差 |
-| `F404` | 部分适用 | `hub_r_end_mm`、`r_trans_bore_web_mm` 为常量；主要依赖 `rim_r_start_mm`、`angle_web_deg`、`z_min` |
+
+| 数据集      | 适用性  | 说明                                                                                     |
+| -------- | ---- | -------------------------------------------------------------------------------------- |
+| `single` | 适用   | 五维均有足够方差                                                                               |
+| `F404`   | 部分适用 | `hub_r_end_mm`、`r_trans_bore_web_mm` 为常量；主要依赖 `rim_r_start_mm`、`angle_web_deg`、`z_min` |
+
 
 F404 的 NPZ 文件当前不含 `condition_json`，需通过索引 CSV 或 Excel 参数表提供条件。
 
@@ -390,15 +423,17 @@ python run.py test --scheme dim_guided --run-dir outputs/dim_guided/single/{time
 
 ### 与相关方案对比
 
-| 对比项 | pca_unet | dim_guided | dim_unet |
-| ------ | -------- | ---------- | -------- |
-| 去噪器 | 条件 UNet（PCA 网格） | MLP | 条件 UNet（PCA 网格） |
-| 条件输入 | 索引 CSV 五维列 | ConditionVector（Excel/NPZ/CSV） | 同 dim_guided |
-| AE 损失 | 标准 L1/L2/零等值面 | 轮缘加权 + gradient | 同 dim_guided |
-| 适用性校验 | 无 | 有 | 有 |
-| PCA 维度 | 128 | 192 | 192 |
-| 配置段名 | `unet` | `diffusion` | `unet` |
-| 分阶段 `--stage` | `unet` | `diff` | `unet` |
+
+| 对比项           | pca_unet        | dim_guided                     | dim_unet        |
+| ------------- | --------------- | ------------------------------ | --------------- |
+| 去噪器           | 条件 UNet（PCA 网格） | MLP                            | 条件 UNet（PCA 网格） |
+| 条件输入          | 索引 CSV 五维列      | ConditionVector（Excel/NPZ/CSV） | 同 dim_guided    |
+| AE 损失         | 标准 L1/L2/零等值面   | 轮缘加权 + gradient                | 同 dim_guided    |
+| 适用性校验         | 无               | 有                              | 有               |
+| PCA 维度        | 128             | 192                            | 192             |
+| 配置段名          | `unet`          | `diffusion`                    | `unet`          |
+| 分阶段 `--stage` | `unet`          | `diff`                         | `unet`          |
+
 
 ### ConditionVector
 
@@ -423,13 +458,15 @@ report = evaluate_applicability(train_df, condition_columns=CONDITION_COLUMNS)
 
 配置文件位于 `schemes/dim_unet/config/{dataset}.json`：
 
-| 配置段 | 说明 |
-| ------ | ---- |
-| `autoencoder` | AE 结构与损失权重（含 `rim`、`gradient`） |
-| `latent_gate` | 潜空间质量门控阈值 |
-| `unet` | 扩散超参：`pca_dim`（192）、`unet_base_ch`、`timesteps`、`sample_steps`（80）、CFG 等 |
-| `condition_validation` | 适用性判定阈值（`min_std_ratio`、`min_abs_std`） |
-| `physics_guidance` | 可选物理引导（默认关闭） |
+
+| 配置段                    | 说明                                                                      |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `autoencoder`          | AE 结构与损失权重（含 `rim`、`gradient`）                                          |
+| `latent_gate`          | 潜空间质量门控阈值                                                               |
+| `unet`                 | 扩散超参：`pca_dim`（192）、`unet_base_ch`、`timesteps`、`sample_steps`（80）、CFG 等 |
+| `condition_validation` | 适用性判定阈值（`min_std_ratio`、`min_abs_std`）                                  |
+| `physics_guidance`     | 可选物理引导（默认关闭）                                                            |
+
 
 与 `pca_unet` 的主要差异：`pca_dim=192`（保留更多潜空间变化方向）、`sample_steps=80`，且 AE 使用轮缘加权损失。
 
@@ -456,13 +493,14 @@ python run.py test --scheme dim_unet --run-dir outputs/dim_unet/F404/{timestamp}
 
 ### 文献方法摘要
 
-| 组件 | 方法（EDM / EDM2） |
-| ---- | ------------------ |
-| 去噪器 | \(D_\theta(x;\sigma) = c_\text{skip}(\sigma)x + c_\text{out}(\sigma)F_\theta(c_\text{in}(\sigma)x;\, c_\text{noise}(\sigma))\) |
-| 训练噪声 | \(\ln\sigma \sim \mathcal{N}(P_\text{mean}, P_\text{std}^2)\)，默认 \(P_\text{mean}=-1.2, P_\text{std}=1.2\) |
-| 损失 | 预条件化 MSE，\(\lambda(\sigma)=1/c_\text{out}(\sigma)^2\) 与 \(c_\text{out}\) 合并 |
-| 采样 | Heun 二阶 ODE（Algorithm 1），\(\sigma\) 调度 \(\rho=7\)，默认 35 步 |
-| 引导 | Classifier-Free Guidance（训练 dropout + 推理混合） |
+| 组件 | 方法 |
+| ---- | ---- |
+| 去噪器 | EDM 预条件化包装：`D = c_skip·x + c_out·F(c_in·x; c_noise)` |
+| 训练噪声 | `ln σ ~ N(P_mean, P_std²)`，默认 `P_mean=-1.2`, `P_std=1.2` |
+| 损失 | 预条件化 MSE，`λ(σ) = 1/c_out(σ)²` |
+| 采样 | Heun 二阶 ODE，`ρ=7`，默认 50 步 |
+| 引导 | Classifier-Free Guidance |
+
 
 ### 使用命令
 
@@ -486,70 +524,78 @@ python run.py test --scheme edm_guided --run-dir outputs/edm_guided/single/{time
 
 基于 [Physics-Informed Diffusion Models (PIDM, ICLR 2025)](https://github.com/jhbastek/PhysicsInformedDiffusionModels) 的损失设计，在 **PCA 潜空间 MLP 扩散** 上引入**几何残差虚拟似然**，使生成样本趋近独立物理约束（而非对齐 GT 风险代理）。
 
-详细对比分析见 [`report.md`](schemes/pidm_guided/report.md)。
+详细对比分析见 [`schemes/pidm_guided/report.md`](schemes/pidm_guided/report.md)。
 
 ### 与 PIDM 原版的对应关系
 
 | PIDM 原版 | `pidm_guided` 适配 |
 | --------- | ------------------ |
 | Darcy / FEM PDE 残差 → 0 | 壁厚违反 + Eikonal 残差 → 0 |
-| `-c_residual · log p(r=0 \| x₀, var_t)` | 同样形式，方差绑定 `posterior_variance_clipped[t]` |
-| 场空间 64×64 直接扩散 | AE 潜空间 PCA(128) + MLP（计算更高效） |
+| 残差虚拟似然（目标 r=0） | 同样形式，方差绑定 `posterior_variance_clipped[t]` |
+| 场空间 64×64 直接扩散 | AE 潜空间 PCA(128) + MLP |
 | 推理 N/M 步 x₀ 校正 | 可选 `n_correction` / `m_correction` |
 
 ### 训练损失
 
-\[
-\mathcal{L} = c_\text{data} \cdot \mathcal{L}_\text{DDPM} + c_\text{residual} \cdot \big(-\log p(r=0 \mid \hat{x}_0, \text{var}_t)\big)
-\]
+```
+L = c_data * L_DDPM + c_residual * (-log p(r=0 | x0_pred, var_t))
+```
 
-- 从预测噪声反推 \(\hat{x}_0\)，经 PCA 逆变换 + AE 解码得到 SDF
+- 从预测噪声反推 `x0_hat`，经 PCA 逆变换 + AE 解码得到 SDF
 - 在 SDF 上计算几何残差（目标为 0，非对齐 GT）
 - 前 `warmup_frac`（默认 33%）epoch 仅训练 DDPM，之后启用物理项
 
 **残差分量**（见 `schemes/pidm_guided/physics/geometry_residual.py`）：
 
-| 分量 | 说明 |
-| ---- | ---- |
-| `thickness_violation` | `ReLU(min_thickness_mm - 估计壁厚)` |
-| `eikonal` | SDF Eikonal 条件 `\|∇SDF\| ≈ 1`（有限差分，权重 `eikonal_weight`） |
-| `area_deviation` | 可选，与 NPZ `physics.area_mm2` 对齐（`use_area_constraint: true`） |
+
+| 分量                    | 说明                                                          |
+| --------------------- | ----------------------------------------------------------- |
+| `thickness_violation` | `ReLU(min_thickness_mm - 估计壁厚)`                             |
+| `eikonal`             | SDF Eikonal 条件 `\|\nabla SDF\| ≈ 1`（有限差分，权重 `eikonal_weight`） |
+| `area_deviation`      | 可选，与 NPZ `physics.area_mm2` 对齐（`use_area_constraint: true`） |
+
 
 ### 与 `mlp` 方案对比
 
-| 对比项 | `mlp` | `pidm_guided` |
-| ------ | ----- | ------------- |
-| 去噪器 | PCA(128) + MLP | 同左 |
-| 扩散框架 | DDPM + DDIM + CFG | 同左 |
-| 物理引导 | `physics_guidance`（默认关，MSE 对齐 GT 风险） | PIDM 虚拟似然（默认开，残差 → 0） |
-| 推理校正 | 无 | 可选 x₀ 梯度校正 |
-| 评估指标 | gen L1 | gen L1 + `mean_physics_residual` |
+
+| 对比项  | `mlp`                                | `pidm_guided`                    |
+| ---- | ------------------------------------ | -------------------------------- |
+| 去噪器  | PCA(128) + MLP                       | 同左                               |
+| 扩散框架 | DDPM + DDIM + CFG                    | 同左                               |
+| 物理引导 | `physics_guidance`（默认关，MSE 对齐 GT 风险） | PIDM 虚拟似然（默认开，残差 → 0）            |
+| 推理校正 | 无                                    | 可选 x₀ 梯度校正                       |
+| 评估指标 | gen L1                               | gen L1 + `mean_physics_residual` |
+
 
 ### 配置说明
 
 配置文件位于 `schemes/pidm_guided/config/{dataset}.json`：
 
-| 配置段 | 说明 |
-| ------ | ---- |
-| `autoencoder` | 与 `mlp` 相同 |
-| `latent_gate` | 潜空间质量门控 |
-| `diffusion` | MLP 扩散超参（`pca_dim`、`timesteps`、CFG 等） |
-| `pidm` | PIDM 专用超参（见下表） |
+
+| 配置段           | 说明                                    |
+| ------------- | ------------------------------------- |
+| `autoencoder` | 与 `mlp` 相同                            |
+| `latent_gate` | 潜空间质量门控                               |
+| `diffusion`   | MLP 扩散超参（`pca_dim`、`timesteps`、CFG 等） |
+| `pidm`        | PIDM 专用超参（见下表）                        |
+
 
 **`pidm` 段主要参数**：
 
-| 参数 | 默认值 | 说明 |
-| ---- | ------ | ---- |
-| `c_data` | 1.0 | DDPM 噪声损失权重 |
-| `c_residual` | 0.001 | 残差虚拟似然权重（0 则退化为纯 DDPM） |
-| `warmup_frac` | 0.33 | 前若干 epoch 仅训 DDPM |
-| `min_thickness_mm` | 2.0 | 最小壁厚约束 (mm) |
-| `use_eikonal` | true | 是否启用 Eikonal 残差 |
-| `eikonal_weight` | 0.1 | Eikonal 残差缩放 |
-| `use_area_constraint` | false | 是否约束截面积 |
-| `n_correction` | 0 | DDIM 采样每步 x₀ 梯度校正次数 |
-| `m_correction` | 0 | 末步 x₀ 梯度校正次数 |
-| `correction_step_size` | 0.05 | 校正步长 |
+
+| 参数                     | 默认值   | 说明                     |
+| ---------------------- | ----- | ---------------------- |
+| `c_data`               | 1.0   | DDPM 噪声损失权重            |
+| `c_residual`           | 0.001 | 残差虚拟似然权重（0 则退化为纯 DDPM） |
+| `warmup_frac`          | 0.33  | 前若干 epoch 仅训 DDPM      |
+| `min_thickness_mm`     | 2.0   | 最小壁厚约束 (mm)            |
+| `use_eikonal`          | true  | 是否启用 Eikonal 残差        |
+| `eikonal_weight`       | 0.1   | Eikonal 残差缩放           |
+| `use_area_constraint`  | false | 是否约束截面积                |
+| `n_correction`         | 0     | DDIM 采样每步 x₀ 梯度校正次数    |
+| `m_correction`         | 0     | 末步 x₀ 梯度校正次数           |
+| `correction_step_size` | 0.05  | 校正步长                   |
+
 
 ### 使用命令
 
@@ -669,9 +715,9 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
     ```
 - **DDIM 采样**：加速推理（50 步而非 200 步）
 - **物理引导（可选）**：
-  - `mlp` / `dim_*` 等方案：`physics_guidance` 对齐 GT 风险代理（默认关闭）
-  - `pidm_guided` 方案：PIDM 虚拟似然，几何残差目标为 0（默认 `c_residual=0.001`）
-  - 详见 [`report.md`](report.md) 与 `schemes/pidm_guided/physics/`
+  - `mlp` / `dim_guided` / `dim_unet` 等：`physics_guidance` 对齐 GT 风险代理（默认关闭）
+  - `pidm_guided`：PIDM 虚拟似然，几何残差目标为 0（默认 `c_residual=0.001`）
+  - 详见 [`schemes/pidm_guided/report.md`](schemes/pidm_guided/report.md) 与 `schemes/pidm_guided/physics/`
 
 ## 数据流详解
 
@@ -713,7 +759,7 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 
 **原理**：
 
-- 将离散时间步 t ∈ \[0, T] 映射为连续向量
+- 将离散时间步 t ∈ [0, T] 映射为连续向量
 - 不同频率捕捉不同时间尺度特征
 - Transformer 经典做法，适用于扩散模型
 
@@ -721,13 +767,13 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 
 **训练阶段**：
 
-- 随机 dropout 条件向量（概率 cfg\_dropout=0.2）
+- 随机 dropout 条件向量（概率 `cfg_dropout=0.2`）
 - 学习条件与无条件两种模式
 
 **推理阶段**：
 
 - 同时计算条件与无条件预测
-- 按 cfg\_scale（默认 1.5）加权混合
+- 按 `cfg_scale`（默认 1.5）加权混合
 - 提升生成质量与条件控制强度
 
 ### 3. DDIM 采样加速
@@ -750,6 +796,7 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 
 ### 自编码器参数
 
+
 | 参数                | 默认值    | 说明                         |
 | ----------------- | ------ | -------------------------- |
 | `in_channels`     | 2      | 输入通道数（SDF + semantic mask） |
@@ -759,7 +806,9 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 | `batch_size`      | 8      | 批大小                        |
 | `lr`              | 0.0003 | 学习率                        |
 
+
 ### 扩散模型参数
+
 
 | 参数             | 默认值    | 说明                |
 | -------------- | ------ | ----------------- |
@@ -774,7 +823,9 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 | `sample_steps` | 50     | DDIM 采样步数         |
 | `use_ddim`     | true   | 使用 DDIM 采样        |
 
+
 ### 质量门控参数
+
 
 | 参数               | 默认值  | 说明           |
 | ---------------- | ---- | ------------ |
@@ -782,7 +833,9 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 | `min_latent_std` | 0.05 | 最小潜空间标准差阈值   |
 | `min_pass_ratio` | 0.85 | 最小样本通过率阈值    |
 
+
 ### UNet 参数（pca_unet / dim_unet 方案）
+
 
 | 参数             | pca_unet 默认 | dim_unet 默认 | 说明         |
 | -------------- | ----------- | ----------- | ---------- |
@@ -791,24 +844,45 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 | `sample_steps` | 50          | 80          | DDIM 采样步数  |
 | `time_dim`     | 128         | 128         | 时间嵌入维度     |
 
+
 ### PIDM 参数（pidm_guided 方案）
 
-| 参数 | 默认值 | 说明 |
-| ---- | ------ | ---- |
-| `c_data` | 1.0 | DDPM 损失权重 |
-| `c_residual` | 0.001 | 残差虚拟似然权重 |
-| `warmup_frac` | 0.33 | 物理项 warmup 比例 |
-| `min_thickness_mm` | 2.0 | 最小壁厚约束 |
-| `use_eikonal` | true | Eikonal 残差开关 |
-| `n_correction` | 0 | 采样 x₀ 校正步数 |
 
-## 参考指标（single 数据集）
+| 参数                 | 默认值   | 说明            |
+| ------------------ | ----- | ------------- |
+| `c_data`           | 1.0   | DDPM 损失权重     |
+| `c_residual`       | 0.001 | 残差虚拟似然权重      |
+| `warmup_frac`      | 0.33  | 物理项 warmup 比例 |
+| `min_thickness_mm` | 2.0   | 最小壁厚约束        |
+| `use_eikonal`      | true  | Eikonal 残差开关  |
+| `n_correction`     | 0     | 采样 x₀ 校正步数    |
 
-| 方案       | mean\_gen\_l1 | AE 重建 L1 | 备注 |
-| -------- | ------------- | -------- | ---- |
-| MLP      | \~0.036       | \~0.008  | |
-| PCA-UNet | \~0.014       | \~0.008  | |
-| dim_guided | 待补充         | \~0.008  | |
-| dim_unet   | 待补充         | \~0.008  | |
-| edm_guided | 待补充         | \~0.008  | |
-| pidm_guided | \~0.049（fast 20ep） | \~0.024 | 另报 `mean_physics_residual` \~0.049 |
+
+## 参考指标
+
+以下为 `outputs/` 中近期 full/fast 训练 run 的 `mean_gen_l1`（越低越好）。`pidm_guided` 另报告 `mean_physics_residual`。
+
+### single 数据集（fast，~15 epoch AE + 20 epoch 扩散）
+
+| 方案 | mean_gen_l1 | AE 重建 L1 | 备注 |
+| ---- | ----------- | ---------- | ---- |
+| MLP | ~0.036 | ~0.008 | 基线 |
+| PCA-UNet | ~0.014 | ~0.008 | UNet 精度最高 |
+| dim_guided | ~0.038 | ~0.009 | 含 ConditionVector 校验 |
+| edm_guided | ~0.030 | ~0.008 | Heun 采样 |
+| pidm_guided | ~0.033 | ~0.009 | `mean_physics_residual` ~0.049 |
+
+### F404 数据集（full，80 epoch AE + 200 epoch 扩散）
+
+| 方案 | mean_gen_l1 | 备注 |
+| ---- | ----------- | ---- |
+| MLP | ~0.037 | |
+| PCA-UNet | ~0.030 | |
+| dim_guided | ~0.043 | 部分条件列为常量 |
+| dim_unet | ~0.025 | UNet + 192 维 PCA |
+| edm_guided | ~0.033 | |
+| pidm_guided | ~0.039 | `mean_physics_residual` 见 run 目录 |
+
+> 指标随 run 变化，以各 run 下 `diffusion/summary.json` 为准。汇总耗时：`python run.py collect-timing`。
+
+
