@@ -139,6 +139,13 @@ def run_eval(run_dir: Path) -> None:
             f"Run directory has neither autoencoder/ nor diffusion/generation_metrics.json: {run_dir}"
         )
 
+    from scripts.timing_utils import load_timing_report
+
+    timing = load_timing_report(run_dir / "timing.json")
+    if timing:
+        report["timing"] = timing
+        save_json(timing, vis_dir / "timing.json")
+
     save_json(report, vis_dir / "summary_report.json")
     print(f"{SCHEME_LABEL} test report -> {vis_dir / 'summary_report.json'}")
 

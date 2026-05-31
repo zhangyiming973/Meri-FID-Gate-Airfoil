@@ -22,6 +22,7 @@
 | PCA-UNet     | `pca_unet`   | `schemes/pca_unet/`     | PCA(128) → 网格 + UNet |
 | 尺寸引导扩散     | `dim_guided` | `schemes/dim_guided/`   | PCA(128) + MLP + ConditionVector 校验 |
 | 尺寸 UNet 扩散   | `dim_unet`   | `schemes/dim_unet/`     | PCA(192) + UNet + ConditionVector 校验 |
+| EDM 扩散引导     | `edm_guided` | `schemes/edm_guided/`   | PCA(128) + EDM 预条件化 MLP + Heun 采样 |
 
 ## 数据集与固定划分
 
@@ -237,6 +238,11 @@ meri-fid-gate/
 │       ├── models/pca_unet.py
 │       ├── pipeline.py
 │       └── ...
+│   └── edm_guided/             # EDM 扩散引导（独立代码）
+│       ├── config/
+│       ├── models/edm_schedule.py
+│       ├── pipeline.py
+│       └── ...
 └── outputs/{scheme}/{dataset}/{timestamp}/
 ```
 
@@ -416,6 +422,38 @@ python run.py train --scheme dim_unet --dataset single --stage unet \
 python run.py test --scheme dim_unet --run-dir outputs/dim_unet/single/{timestamp}
 python run.py test --scheme dim_unet --run-dir outputs/dim_unet/F404/{timestamp}
 ```
+
+## edm_guided 方案（EDM 扩散引导）
+
+基于 Karras et al. EDM 框架（见 `wenxian/` 文献），在 PCA 潜空间上实现**预条件化扩散 + Classifier-Free Guidance + Heun 二阶采样**。
+
+### 文献方法摘要
+
+| 组件 | 方法（EDM / EDM2） |
+| ---- | ------------------ |
+| 去噪器 | \(D_\theta(x;\sigma) = c_\text{skip}(\sigma)x + c_\text{out}(\sigma)F_\theta(c_\text{in}(\sigma)x;\, c_\text{noise}(\sigma))\) |
+| 训练噪声 | \(\ln\sigma \sim \mathcal{N}(P_\text{mean}, P_\text{std}^2)\)，默认 \(P_\text{mean}=-1.2, P_\text{std}=1.2\) |
+| 损失 | 预条件化 MSE，\(\lambda(\sigma)=1/c_\text{out}(\sigma)^2\) 与 \(c_\text{out}\) 合并 |
+| 采样 | Heun 二阶 ODE（Algorithm 1），\(\sigma\) 调度 \(\rho=7\)，默认 35 步 |
+| 引导 | Classifier-Free Guidance（训练 dropout + 推理混合） |
+
+### 使用命令
+
+```bash
+# 全流程训练
+python run.py train --scheme edm_guided --dataset single
+python run.py train --scheme edm_guided --dataset F404 --fast
+
+# 分阶段
+python run.py train --scheme edm_guided --dataset single --stage ae
+python run.py train --scheme edm_guided --dataset single --stage diff \
+  --ae-run-dir outputs/edm_guided/single/{timestamp}/autoencoder
+
+# 测试 / 可视化
+python run.py test --scheme edm_guided --run-dir outputs/edm_guided/single/{timestamp}
+```
+
+配置文件位于 `schemes/edm_guided/config/{dataset}.json`，`edm` 段控制 EDM 超参（`sigma_data` 为 null 时从训练集 PCA 编码自动估计）。
 
 ## 添加新方案
 

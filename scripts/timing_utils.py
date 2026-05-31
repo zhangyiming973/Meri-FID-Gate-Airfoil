@@ -176,6 +176,132 @@ def collect_timing_reports(
     return rows
 
 
+_SCHEME_ORDER = ("mlp", "pca_unet", "dim_guided", "dim_unet")
+
+_STAGE_SPECS: tuple[tuple[str, str], ...] = (
+    ("condition_validation", "Cond val"),
+    ("autoencoder", "Autoencoder"),
+    ("diffusion", "Diffusion"),
+    ("test_eval", "Test"),
+)
+
+_STAGE_COLORS: dict[str, str] = {
+    "condition_validation": "#95a5a6",
+    "autoencoder": "#3498db",
+    "diffusion": "#e74c3c",
+    "test_eval": "#2ecc71",
+}
+
+
+def _stage_seconds(rec: dict[str, Any], stage_key: str) -> float:
+    if stage_key == "test_eval":
+        test = rec.get("test") or {}
+        stages = test.get("stages") or {}
+        if "test_eval" in stages:
+            return float(stages["test_eval"].get("sec", 0.0) or 0.0)
+        return float(test.get("total_sec", 0.0) or 0.0)
+    train = rec.get("train") or {}
+    stages = train.get("stages") or {}
+    return float(stages.get(stage_key, {}).get("sec", 0.0) or 0.0)
+
+
+def _latest_run_per_scheme_dataset(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+    """同一 (scheme, dataset) 只保留 run_id 最新的一条。"""
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
+    for rec in rows:
+        key = (str(rec.get("scheme", "")), str(rec.get("dataset", "")))
+        run_id = str(rec.get("run_id", ""))
+        if key not in latest or run_id > str(latest[key].get("run_id", "")):
+            latest[key] = rec
+    return latest
+
+
+def _scheme_sort_key(scheme: str) -> tuple[int, str]:
+    try:
+        return (_SCHEME_ORDER.index(scheme), scheme)
+    except ValueError:
+        return (len(_SCHEME_ORDER), scheme)
+
+
+def export_timing_chart(rows: list[dict[str, Any]], path: Path) -> None:
+    """将各方案各阶段耗时导出为对比图（同一 scheme/dataset 取最新 run）。"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    latest = _latest_run_per_scheme_dataset(rows)
+    if not latest:
+        return
+
+    by_dataset: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for (scheme, dataset), rec in latest.items():
+        by_dataset.setdefault(dataset, []).append((scheme, rec))
+    for entries in by_dataset.values():
+        entries.sort(key=lambda item: _scheme_sort_key(item[0]))
+
+    n_ds = len(by_dataset)
+    max_schemes = max(len(v) for v in by_dataset.values())
+    fig_h = 4.5 * n_ds
+    fig_w = max(8.0, 1.6 * max_schemes + 2.0)
+    fig, axes = plt.subplots(n_ds, 1, figsize=(fig_w, fig_h), squeeze=False)
+
+    legend_handles: list[Any] = []
+    legend_labels: list[str] = []
+
+    for ax_idx, (dataset, entries) in enumerate(sorted(by_dataset.items())):
+        ax = axes[ax_idx, 0]
+        schemes = [scheme for scheme, _ in entries]
+        x = np.arange(len(schemes))
+        width = 0.62
+        bottom = np.zeros(len(schemes), dtype=float)
+
+        for stage_key, stage_label in _STAGE_SPECS:
+            values = np.array([_stage_seconds(rec, stage_key) for _, rec in entries], dtype=float)
+            if not values.any():
+                continue
+            bars = ax.bar(
+                x,
+                values,
+                width,
+                bottom=bottom,
+                label=stage_label,
+                color=_STAGE_COLORS[stage_key],
+            )
+            if not legend_labels or stage_label not in legend_labels:
+                legend_handles.append(bars)
+                legend_labels.append(stage_label)
+            bottom += values
+
+        for xi, total in enumerate(bottom):
+            if total <= 0:
+                continue
+            ax.text(
+                xi,
+                total,
+                format_duration(float(total)),
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(schemes)
+        ax.set_ylabel("Time (s)")
+        if n_ds > 1:
+            ax.set_title(f"Timing by stage — dataset={dataset} (latest run per scheme)")
+        else:
+            dataset_label = dataset if dataset else "all"
+            ax.set_title(f"Timing by stage — dataset={dataset_label} (latest run per scheme)")
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_axisbelow(True)
+
+    if legend_handles:
+        fig.legend(legend_handles, legend_labels, loc="upper center", ncol=len(legend_labels), bbox_to_anchor=(0.5, 1.02))
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
 def export_timing_csv(rows: list[dict[str, Any]], path: Path) -> None:
     """将汇总记录导出为 CSV（便于汇报）。"""
     import csv

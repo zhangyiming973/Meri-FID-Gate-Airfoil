@@ -17,6 +17,7 @@ from schemes.mlp.train.train_ae import train_autoencoder
 from schemes.mlp.train.train_diffusion import train_diffusion
 from schemes.mlp.utils.config import load_config
 from schemes.mlp.utils.paths import make_run_dir, project_root, scheme_name
+from scripts.timing_utils import StageTimer, finalize_test_timing, finalize_train_timing, print_timing_summary
 
 
 def resolve_config(dataset: str, scheme_cfg: dict[str, Any]) -> dict[str, Any]:
@@ -90,21 +91,50 @@ def run_train(
     setup_logging(run_dir)
     logging.info("Scheme=%s dataset=%s stage=%s run_dir=%s", scheme_name(), dataset, stage, run_dir)
 
+    timer = StageTimer()
+    timer.start()
     ae_dir = Path(ae_run_dir) if ae_run_dir else None
     if stage in ("all", "ae"):
-        ae_dir = train_autoencoder(cfg, run_dir / "autoencoder")
+        with timer.stage("autoencoder"):
+            ae_dir = train_autoencoder(cfg, run_dir / "autoencoder")
     if stage in ("all", "diff"):
         if ae_dir is None:
             raise ValueError("--ae-run-dir required for diffusion-only stage")
-        train_diffusion(cfg, ae_dir, run_dir / "diffusion")
+        with timer.stage("diffusion"):
+            train_diffusion(cfg, ae_dir, run_dir / "diffusion")
+
+    timing_report = finalize_train_timing(run_dir, scheme_name(), dataset, stage, fast, timer)
+    print_timing_summary(timing_report, title="MLP Training Timing")
+    logging.info(
+        "Training timing: total=%s | ae=%s | diffusion=%s",
+        timing_report["train"]["total_human"],
+        timing_report["train"]["stages"].get("autoencoder", {}).get("human", "N/A"),
+        timing_report["train"]["stages"].get("diffusion", {}).get("human", "N/A"),
+    )
     return run_dir
 
 
 def run_test(run_dir: str) -> None:
     """对已完成训练的运行目录执行评估与可视化。"""
     from schemes.mlp.test import run_eval
+    from schemes.mlp.utils.visualization import save_json
 
-    run_eval(Path(run_dir))
+    run_path = Path(run_dir)
+    timer = StageTimer()
+    timer.start()
+    with timer.stage("test_eval"):
+        run_eval(run_path)
+    timing_report = finalize_test_timing(run_path, scheme_name(), timer)
+    vis_report = run_path / "visualizations" / "summary_report.json"
+    if vis_report.exists():
+        import json
+
+        with open(vis_report, encoding="utf-8") as f:
+            report = json.load(f)
+        report["timing"] = timing_report
+        save_json(report, vis_report)
+        save_json(timing_report, run_path / "visualizations" / "timing.json")
+    print_timing_summary(timing_report, title="MLP Test Timing")
 
 
 if __name__ == "__main__":

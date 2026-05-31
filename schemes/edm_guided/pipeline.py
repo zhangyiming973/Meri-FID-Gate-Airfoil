@@ -1,11 +1,10 @@
-"""PCA-UNet 扩散方案训练/测试入口。
+"""edm_guided 方案统一入口：EDM 预条件化潜空间扩散。
 
-本方案与标准 latent diffusion 共用同一自编码器（AE），但去噪器改为在 PCA 降维后的
-2D 网格上运行的条件 UNet。训练分两阶段：
-  1. AE：学习 SDF 的潜空间表示 z_m
-  2. Diffusion：对 PCA 网格上的潜变量做条件扩散建模
-
-命令行用法见 ``__main__`` 块。
+流程概览：
+1. 自编码器（AE）将 2D SDF 编码为潜空间 z_m；
+2. PCA 将 z_m 压缩为低维向量；
+3. EDM 预条件化 MLP + 对数正态噪声训练 + Heun 采样（含 CFG）；
+4. 采样潜码经 PCA 逆变换与 AE 解码，生成子午线 SDF。
 """
 from __future__ import annotations
 
@@ -15,27 +14,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from schemes.pca_unet.train.train_ae import train_autoencoder
-from schemes.pca_unet.train.train_diffusion import train_diffusion
-from schemes.pca_unet.utils.config import load_config
-from schemes.pca_unet.utils.paths import make_run_dir, project_root, scheme_name
+from schemes.edm_guided.train.train_ae import train_autoencoder
+from schemes.edm_guided.train.train_diffusion import train_diffusion
+from schemes.edm_guided.utils.config import load_config
+from schemes.edm_guided.utils.paths import make_run_dir, project_root, scheme_name
 from scripts.timing_utils import StageTimer, finalize_test_timing, finalize_train_timing, print_timing_summary
 
 
 def resolve_config(dataset: str, scheme_cfg: dict[str, Any]) -> dict[str, Any]:
-    """将方案配置与数据集元信息合并为完整训练配置。
-
-    从 ``data/<dataset>/dataset.json`` 读取处理后数据路径、NPZ 目录、
-    条件列等元数据，再与 ``schemes/pca_unet/config/<dataset>.json`` 中的
-    超参合并。
-
-    Args:
-        dataset: 数据集名称（如 ``single``、``F404``）。
-        scheme_cfg: 方案级 JSON 配置字典。
-
-    Returns:
-        包含数据路径、条件列、AE/UNet 超参的完整配置。
-    """
     root = project_root()
     meta_path = root / "data" / dataset / "dataset.json"
     with open(meta_path, encoding="utf-8") as f:
@@ -54,14 +40,12 @@ def resolve_config(dataset: str, scheme_cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_scheme_config(dataset: str) -> dict[str, Any]:
-    """加载指定数据集的 PCA-UNet 方案配置。"""
     cfg_path = project_root() / "schemes" / scheme_name() / "config" / f"{dataset}.json"
     scheme_cfg = load_config(cfg_path)
     return resolve_config(dataset, scheme_cfg)
 
 
 def setup_logging(run_dir: Path) -> None:
-    """在运行目录下配置日志：同时输出到文件与标准输出。"""
     log_dir = run_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -81,27 +65,22 @@ def run_train(
     fast: bool = False,
     ae_run_dir: str | None = None,
 ) -> Path:
-    """执行 PCA-UNet 训练流水线。
-
-    Args:
-        dataset: 数据集名称。
-        stage: 训练阶段——``all``（AE+扩散）、``ae``（仅 AE）、
-               ``diff``/``unet``（仅扩散，需提供 AE 检查点）。
-        fast: 快速调试模式，缩短 epoch 数。
-        ae_run_dir: 已有 AE 运行目录；仅扩散阶段必填。
-
-    Returns:
-        本次运行的根目录路径。
-    """
     cfg = load_scheme_config(dataset)
     if fast:
-        # 快速模式：减少 epoch 以便冒烟测试
         cfg["autoencoder"]["epochs"] = 15
-        cfg["unet"]["epochs"] = 20
+        cfg["diffusion"]["epochs"] = 20
 
     run_dir = make_run_dir(dataset)
     setup_logging(run_dir)
     logging.info("Scheme=%s dataset=%s stage=%s run_dir=%s", scheme_name(), dataset, stage, run_dir)
+    logging.info(
+        "EDM config: sigma_data=%s p_mean=%s p_std=%s rho=%s sample_steps=%s",
+        cfg.get("edm", {}).get("sigma_data", "auto"),
+        cfg.get("edm", {}).get("p_mean", -1.2),
+        cfg.get("edm", {}).get("p_std", 1.2),
+        cfg.get("edm", {}).get("rho", 7.0),
+        cfg.get("diffusion", {}).get("sample_steps", 35),
+    )
 
     timer = StageTimer()
     timer.start()
@@ -109,14 +88,14 @@ def run_train(
     if stage in ("all", "ae"):
         with timer.stage("autoencoder"):
             ae_dir = train_autoencoder(cfg, run_dir / "autoencoder")
-    if stage in ("all", "diff", "unet"):
+    if stage in ("all", "diff"):
         if ae_dir is None:
             raise ValueError("--ae-run-dir required for diffusion-only stage")
         with timer.stage("diffusion"):
             train_diffusion(cfg, ae_dir, run_dir / "diffusion")
 
     timing_report = finalize_train_timing(run_dir, scheme_name(), dataset, stage, fast, timer)
-    print_timing_summary(timing_report, title="PCA-UNet Training Timing")
+    print_timing_summary(timing_report, title="edm_guided Training Timing")
     logging.info(
         "Training timing: total=%s | ae=%s | diffusion=%s",
         timing_report["train"]["total_human"],
@@ -127,9 +106,8 @@ def run_train(
 
 
 def run_test(run_dir: str) -> None:
-    """对已完成训练运行评估与可视化。"""
-    from schemes.pca_unet.test import run_eval
-    from schemes.pca_unet.utils.visualization import save_json
+    from schemes.edm_guided.test import run_eval
+    from schemes.edm_guided.utils.visualization import save_json
 
     run_path = Path(run_dir)
     timer = StageTimer()
@@ -146,16 +124,16 @@ def run_test(run_dir: str) -> None:
         report["timing"] = timing_report
         save_json(report, vis_report)
         save_json(timing_report, run_path / "visualizations" / "timing.json")
-    print_timing_summary(timing_report, title="PCA-UNet Test Timing")
+    print_timing_summary(timing_report, title="edm_guided Test Timing")
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="PCA-UNet diffusion scheme")
+    parser = argparse.ArgumentParser(description="edm_guided EDM diffusion scheme")
     parser.add_argument("task", choices=["train", "test"])
     parser.add_argument("--dataset", required=True)
-    parser.add_argument("--stage", choices=["all", "ae", "diff", "unet"], default="all")
+    parser.add_argument("--stage", choices=["all", "ae", "diff"], default="all")
     parser.add_argument("--fast", action="store_true")
     parser.add_argument("--run-dir", default=None)
     parser.add_argument("--ae-run-dir", default=None)

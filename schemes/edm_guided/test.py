@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MLP 方案测试入口：聚合 AE + 扩散训练产物，生成统一可视化报告。
+"""edm_guided 方案测试入口：聚合 AE + EDM 扩散训练产物，生成统一可视化报告。
 
 替代旧版 ``visualize.py``：从 ``autoencoder/`` 与 ``diffusion/`` 子目录读取
 训练阶段已保存的指标与图像，汇总到 ``<run_dir>/visualizations/``。
@@ -14,9 +14,9 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 
-from schemes.mlp.utils.visualization import plot_per_sample_metrics, save_json
+from schemes.edm_guided.utils.visualization import plot_per_sample_metrics, save_json
 
-SCHEME_LABEL = "MLP"
+SCHEME_LABEL = "EDM-Guided"
 
 _AE_ARTIFACTS = [
     ("training_dashboard.png", "ae_training_dashboard.png"),
@@ -87,7 +87,7 @@ def run_eval(run_dir: Path) -> None:
 
     report: dict[str, Any] = {
         "run_dir": str(run_dir),
-        "scheme": "mlp",
+        "scheme": "edm_guided",
         "artifacts": {},
     }
 

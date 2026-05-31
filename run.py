@@ -31,6 +31,8 @@ SCHEMES = {
     "mlp": "schemes.mlp.pipeline",
     "pca_unet": "schemes.pca_unet.pipeline",
     "dim_guided": "schemes.dim_guided.pipeline",
+    "dim_unet": "schemes.dim_unet.pipeline",
+    "edm_guided": "schemes.edm_guided.pipeline",
 }
 
 
@@ -70,12 +72,45 @@ def cmd_train(args: argparse.Namespace) -> None:
         ae_run_dir=args.ae_run_dir,
     )
     print(f"Training finished: {run_dir}")
+    timing_path = Path(run_dir) / "timing.json"
+    if timing_path.exists():
+        print(f"Timing report: {timing_path}")
 
 
 def cmd_test(args: argparse.Namespace) -> None:
     """执行 test 子命令：对指定 run 目录做推理/评估/可视化。"""
     pipeline = _import_pipeline(args.scheme)
     pipeline.run_test(args.run_dir)
+    timing_path = Path(args.run_dir) / "timing.json"
+    if timing_path.exists():
+        print(f"Timing report: {timing_path}")
+
+
+def cmd_collect_timing(args: argparse.Namespace) -> None:
+    """汇总 outputs/ 下各 run 的 timing.json，导出汇报用 CSV/JSON。"""
+    from scripts.timing_utils import (
+        collect_timing_reports,
+        export_timing_chart,
+        export_timing_csv,
+        save_timing_report,
+    )
+
+    outputs_root = ROOT / "outputs"
+    rows = collect_timing_reports(outputs_root, scheme=args.scheme, dataset=args.dataset)
+    if not rows:
+        print("No timing.json found under outputs/")
+        return
+    out_dir = ROOT / "outputs"
+    summary_json = out_dir / "timing_summary.json"
+    summary_csv = out_dir / "timing_summary.csv"
+    summary_chart = out_dir / "timing_comparison.png"
+    save_timing_report(summary_json, {"runs": rows, "count": len(rows)})
+    export_timing_csv(rows, summary_csv)
+    export_timing_chart(rows, summary_chart)
+    print(f"Collected {len(rows)} run(s)")
+    print(f"  JSON:  {summary_json}")
+    print(f"  CSV:   {summary_csv}")
+    print(f"  Chart: {summary_chart}")
 
 
 def main() -> None:
@@ -91,7 +126,7 @@ def main() -> None:
 
     # --- 训练 ---
     train = sub.add_parser("train", help="Train autoencoder + diffusion for a scheme")
-    train.add_argument("--scheme", required=True, choices=list(SCHEMES), help="mlp, pca_unet, or dim_guided")
+    train.add_argument("--scheme", required=True, choices=list(SCHEMES), help="mlp, pca_unet, dim_guided, or dim_unet")
     train.add_argument("--dataset", required=True, help="Dataset name, e.g. single or F404")
     train.add_argument(
         "--stage",
@@ -110,13 +145,19 @@ def main() -> None:
     test.add_argument("--run-dir", required=True, help="Run directory under outputs/{scheme}/{dataset}/{timestamp}/")
     test.set_defaults(func=cmd_test)
 
+    # --- 计时汇总 ---
+    timing = sub.add_parser("collect-timing", help="Aggregate timing.json from all runs under outputs/")
+    timing.add_argument("--scheme", default=None, help="Filter by scheme, e.g. mlp")
+    timing.add_argument("--dataset", default=None, help="Filter by dataset, e.g. single")
+    timing.set_defaults(func=cmd_collect_timing)
+
     args = parser.parse_args()
 
     # 阶段别名归一化：mlp 无 UNet，unet 等价于 diff
-    if args.command == "train" and args.stage == "unet" and args.scheme == "mlp":
+    if args.command == "train" and args.stage == "unet" and args.scheme in ("mlp", "dim_guided"):
         args.stage = "diff"
-    if args.command == "train" and args.stage == "diff" and args.scheme == "pca_unet":
-        pass  # pca_unet 的 diff 阶段即 UNet 扩散训练，无需改写
+    if args.command == "train" and args.stage == "diff" and args.scheme in ("pca_unet", "dim_unet"):
+        pass  # diff / unet 均为 UNet 扩散阶段
 
     args.func(args)
 
