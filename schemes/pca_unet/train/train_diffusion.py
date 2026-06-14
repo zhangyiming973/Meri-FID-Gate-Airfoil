@@ -34,6 +34,47 @@ from schemes.pca_unet.utils.visualization import (
 )
 
 
+def build_diffusion_train_loader(
+    train_recs,
+    z_train_np: np.ndarray,
+    pca_dim: int,
+    batch_size: int,
+) -> DataLoader:
+    """由 AE latent records 构建 PCA 网格扩散训练 DataLoader。"""
+    pca = LatentPCA.fit(z_train_np, pca_dim)
+    codec = DiffusionLatentCodec.from_mode("pca_unet", pca, z_train_np.shape)
+    z_enc = codec.encode_numpy(z_train_np)
+    c_train = torch.from_numpy(np.stack([r.condition_norm for r in train_recs])).float()
+    return DataLoader(TensorDataset(z_enc, c_train), batch_size=batch_size, shuffle=True)
+
+
+def load_autoencoder_from_checkpoint(
+    ckpt_path: Path,
+    ae_cfg: dict[str, Any],
+    device: torch.device,
+) -> MeridianAutoEncoder:
+    """按 checkpoint 保存的通道和尺寸配置恢复冻结 AE。"""
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    ae = MeridianAutoEncoder(
+        ckpt["in_channels"],
+        ae_cfg["latent_channels"],
+        ckpt.get("latent_spatial", ae_cfg["latent_spatial"]),
+        output_size=ckpt.get("input_size", ae_cfg.get("input_size", [256, 256])),
+    ).to(device)
+    ae.load_state_dict(ckpt["model"])
+    ae.eval()
+    return ae
+
+
+def build_pca_unet_for_conditions(
+    pca_dim: int,
+    cond_stats: ConditionStats,
+    base_ch: int = 64,
+):
+    """按 condition_stats 列数构建 PCA-UNet 去噪器。"""
+    return build_pca_unet(pca_dim, len(cond_stats.columns), base_ch=base_ch)
+
+
 @torch.no_grad()
 def _eval_generation_l1(
     unet,
@@ -111,17 +152,9 @@ def train_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path) -> Pat
     train_loader = DataLoader(TensorDataset(z_enc, c_train), batch_size=unet_cfg["batch_size"], shuffle=True)
 
     # 加载冻结的 AE，用于物理引导与最终 SDF 解码
-    ckpt = torch.load(ae_run_dir / "best_autoencoder.pt", map_location=device, weights_only=False)
-    ae = MeridianAutoEncoder(
-        ckpt["in_channels"],
-        ae_cfg["latent_channels"],
-        ckpt.get("latent_spatial", ae_cfg["latent_spatial"]),
-        output_size=ckpt.get("input_size", ae_cfg.get("input_size", [256, 256])),
-    ).to(device)
-    ae.load_state_dict(ckpt["model"])
-    ae.eval()
+    ae = load_autoencoder_from_checkpoint(ae_run_dir / "best_autoencoder.pt", ae_cfg, device)
 
-    unet, grid_spec = build_pca_unet(pca.dim, len(cond_stats.columns), base_ch=unet_cfg.get("unet_base_ch", 64))
+    unet, grid_spec = build_pca_unet_for_conditions(pca.dim, cond_stats, base_ch=unet_cfg.get("unet_base_ch", 64))
     unet = unet.to(device)
     schedule = DiffusionSchedule(unet_cfg["timesteps"], device)
     opt = torch.optim.AdamW(unet.parameters(), lr=unet_cfg["lr"], weight_decay=1e-4)
