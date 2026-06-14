@@ -44,21 +44,28 @@ def estimate_area(sdf: torch.Tensor, sdf_scale: float = 12.0) -> torch.Tensor:
 
 
 def semantic_consistency_loss(recon: torch.Tensor, semantic: torch.Tensor) -> torch.Tensor:
-    """语义区域内外符号一致性：各语义带内「内部」像素覆盖率应接近 1。
+    """语义区域内外符号一致性：语义区域内「内部」像素覆盖率应接近 1。
 
-    将语义掩码分为三个区域带，分别计算 recon<0 的覆盖率与 1 的偏差。
+    二值 mask 按单一区域处理；0-1 归一化后的多区域 Meridian mask 仍按三个区域带处理。
     """
     inside = (recon < 0).float()
-    regions = [
-        (semantic > 0.1) & (semantic < 0.4),
-        (semantic > 0.4) & (semantic < 0.8),
-        semantic > 0.8,
-    ]
+    unique_values = torch.unique(semantic.detach())
+    if unique_values.numel() <= 2:
+        regions = [semantic > 0.5]
+    else:
+        regions = [
+            (semantic > 0.1) & (semantic < 0.4),
+            (semantic > 0.4) & (semantic < 0.8),
+            semantic > 0.8,
+        ]
     losses = []
     for mask in regions:
         m = mask.float()
         if m.sum() < 1:
             continue
+        while m.ndim < inside.ndim:
+            m = m.unsqueeze(0)
+        m = m.expand_as(inside)
         cov = (inside * m).sum(dim=(-2, -1)) / (m.sum(dim=(-2, -1)) + 1e-6)
         losses.append((1.0 - cov).mean())
     return torch.stack(losses).mean() if losses else torch.tensor(0.0, device=recon.device)

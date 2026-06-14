@@ -112,7 +112,12 @@ def train_diffusion(cfg: dict[str, Any], ae_run_dir: Path, run_dir: Path) -> Pat
 
     # 加载冻结的 AE，用于物理引导与最终 SDF 解码
     ckpt = torch.load(ae_run_dir / "best_autoencoder.pt", map_location=device, weights_only=False)
-    ae = MeridianAutoEncoder(ckpt["in_channels"], ae_cfg["latent_channels"], ae_cfg["latent_spatial"]).to(device)
+    ae = MeridianAutoEncoder(
+        ckpt["in_channels"],
+        ae_cfg["latent_channels"],
+        ckpt.get("latent_spatial", ae_cfg["latent_spatial"]),
+        output_size=ckpt.get("input_size", ae_cfg.get("input_size", [256, 256])),
+    ).to(device)
     ae.load_state_dict(ckpt["model"])
     ae.eval()
 

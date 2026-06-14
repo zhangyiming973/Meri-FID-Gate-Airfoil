@@ -39,8 +39,12 @@ from schemes.pca_unet.utils.visualization import (
 @torch.no_grad()
 def _physics_for_sample(batch_physics, index: int) -> dict:
     """从 batch 物理摘要中提取单样本 dict（兼容 list 与 collated dict）。"""
+    if not batch_physics:
+        return {}
     if isinstance(batch_physics, list):
         return batch_physics[index]
+    if "min_thickness_mm" not in batch_physics or "area_mm2" not in batch_physics:
+        return {}
     return {
         "min_thickness_mm": float(batch_physics["min_thickness_mm"][index]),
         "area_mm2": float(batch_physics["area_mm2"][index]),
@@ -122,7 +126,13 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path) -> Path:
 
     # --- 模型与优化器 ---
     in_ch = 2 if ae_cfg["use_semantic"] else 1
-    model = MeridianAutoEncoder(in_ch, ae_cfg["latent_channels"], ae_cfg["latent_spatial"]).to(device)
+    input_size = tuple(ae_cfg.get("input_size", [256, 256]))
+    model = MeridianAutoEncoder(
+        in_ch,
+        ae_cfg["latent_channels"],
+        ae_cfg["latent_spatial"],
+        output_size=input_size,
+    ).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=ae_cfg["lr"])
     lw = AELossWeights(**ae_cfg["loss_weights"])
     history: dict[str, list[float]] = {"train_total": [], "train_l1": [], "val_l1": [], "val_total": []}
@@ -134,6 +144,8 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path) -> Path:
         tr_tot, tr_l1, n = 0.0, 0.0, 0
         for batch in tqdm(train_loader, desc=f"AE {epoch}/{ae_cfg['epochs']}", leave=False):
             x, sdf, sem = batch["x"].to(device), batch["sdf"].to(device), batch["semantic"].to(device)
+            if tuple(sdf.shape[-2:]) != input_size:
+                raise ValueError(f"Expected SDF size {input_size}, got {tuple(sdf.shape[-2:])}")
             opt.zero_grad()
             _, recon = model(x)
             losses = compute_ae_losses(recon, sdf, sem, batch["physics"], lw)
@@ -151,6 +163,8 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path) -> Path:
         with torch.no_grad():
             for batch in test_loader:
                 x, sdf, sem = batch["x"].to(device), batch["sdf"].to(device), batch["semantic"].to(device)
+                if tuple(sdf.shape[-2:]) != input_size:
+                    raise ValueError(f"Expected SDF size {input_size}, got {tuple(sdf.shape[-2:])}")
                 _, recon = model(x)
                 losses = compute_ae_losses(recon, sdf, sem, batch["physics"], lw)
                 vl_tot += losses["total"].item()
@@ -162,7 +176,16 @@ def train_autoencoder(cfg: dict[str, Any], run_dir: Path) -> Path:
         # 按验证 L1 保存最优检查点
         if history["val_l1"][-1] < best_val:
             best_val = history["val_l1"][-1]
-            torch.save({"model": model.state_dict(), "in_channels": in_ch, "epoch": epoch}, run_dir / "best_autoencoder.pt")
+            torch.save(
+                {
+                    "model": model.state_dict(),
+                    "in_channels": in_ch,
+                    "epoch": epoch,
+                    "input_size": list(input_size),
+                    "latent_spatial": ae_cfg["latent_spatial"],
+                },
+                run_dir / "best_autoencoder.pt",
+            )
 
         if epoch == 1 or epoch % 10 == 0 or epoch == ae_cfg["epochs"]:
             print(f"[AE] ep{epoch}: train_l1={history['train_l1'][-1]:.4f} val_l1={history['val_l1'][-1]:.4f}")

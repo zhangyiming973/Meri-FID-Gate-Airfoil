@@ -11,6 +11,8 @@ Meridian 叶轮几何由若干标量条件驱动扩散模型；本模块负责�
 from __future__ import annotations
 
 import json
+import math
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
@@ -215,9 +217,24 @@ def enrich_index_conditions(
     return df
 
 
+def _resolve_test_count(test_size: int | float, total: int) -> int:
+    """将 ``test_size`` 解析为测试集样本数。
+
+    ``0 < test_size < 1`` 表示比例；其他数值按样本数处理。
+    """
+    if isinstance(test_size, bool) or not isinstance(test_size, Real):
+        raise TypeError(f"test_size must be an int count or float ratio, got {type(test_size).__name__}")
+    if test_size < 0:
+        raise ValueError(f"test_size must be non-negative, got {test_size}")
+    if 0 < float(test_size) < 1:
+        n_test = int(math.ceil(total * float(test_size)))
+        return min(max(n_test, 1), max(total - 1, 1)) if total > 1 else total
+    return min(int(test_size), total)
+
+
 def make_train_test_split(
     index_path: Path,
-    test_size: int = 10,
+    test_size: int | float = 10,
     seed: int = 42,
     output_dir: Path | None = None,
     filter_passed_quality: bool = True,
@@ -230,7 +247,7 @@ def make_train_test_split(
 
     Args:
         index_path: 全量样本索引 CSV 路径。
-        test_size: 测试集样本数上限（不超过总样本数）。
+        test_size: 测试集样本数上限；``0 < test_size < 1`` 时按比例划分。
         seed: ``pandas.DataFrame.sample`` 的随机种子，保证可复现。
         output_dir: 若给定，写入 train/test CSV 与 ``split_meta.json``。
         filter_passed_quality: 为 True 时仅保留 ``passed_quality==true`` 的行。
@@ -265,7 +282,7 @@ def make_train_test_split(
     if len(df) == 0:
         raise ValueError(f"Index is empty: {index_path}")
 
-    n_test = min(test_size, len(df))
+    n_test = _resolve_test_count(test_size, len(df))
     test_idx = df.sample(n=n_test, random_state=seed).index
     test_df = df.loc[test_idx].reset_index(drop=True)
     train_df = df.drop(index=test_idx).reset_index(drop=True)
@@ -278,6 +295,7 @@ def make_train_test_split(
             json.dump(
                 {
                     "test_size": n_test,
+                    "requested_test_size": test_size,
                     "seed": seed,
                     "filter_passed_quality": filter_passed_quality,
                     "train_count": len(train_df),
