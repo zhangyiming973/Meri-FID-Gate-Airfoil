@@ -22,6 +22,28 @@ from schemes.pca_unet.utils.paths import make_run_dir, project_root, scheme_name
 from scripts.timing_utils import StageTimer, finalize_test_timing, finalize_train_timing, print_timing_summary
 
 
+def _as_hw(value: int | list[int] | tuple[int, ...], name: str) -> tuple[int, int]:
+    """将整数或二维列表配置解析为 (H, W)。"""
+    if isinstance(value, int):
+        return (value, value)
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return (int(value[0]), int(value[1]))
+    raise ValueError(f"{name} must be an int or a two-item list, got {value!r}")
+
+
+def validate_autoencoder_geometry(ae_cfg: dict[str, Any]) -> None:
+    """校验 AE 输入尺寸与 latent 空间尺寸匹配当前 4 次下采样结构。"""
+    input_size = _as_hw(ae_cfg.get("input_size", [256, 256]), "input_size")
+    latent_spatial = _as_hw(ae_cfg.get("latent_spatial", 16), "latent_spatial")
+    if input_size[0] % latent_spatial[0] != 0 or input_size[1] % latent_spatial[1] != 0:
+        raise ValueError(f"input_size {input_size} must be divisible by latent_spatial {latent_spatial}")
+    ratio = (input_size[0] // latent_spatial[0], input_size[1] // latent_spatial[1])
+    if ratio != (16, 16):
+        raise ValueError(
+            f"input_size / latent_spatial must be 16 in each dimension for the current AE, got {ratio}"
+        )
+
+
 def resolve_config(dataset: str, scheme_cfg: dict[str, Any]) -> dict[str, Any]:
     """将方案配置与数据集元信息合并为完整训练配置。
 
@@ -50,6 +72,9 @@ def resolve_config(dataset: str, scheme_cfg: dict[str, Any]) -> dict[str, Any]:
     }
     merged.update(scheme_cfg)
     merged["dataset"] = dataset
+    if not merged.get("condition_columns"):
+        raise ValueError(f"Dataset {dataset} must define non-empty condition_columns")
+    validate_autoencoder_geometry(merged["autoencoder"])
     return merged
 
 
