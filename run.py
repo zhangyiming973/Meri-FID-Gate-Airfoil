@@ -5,6 +5,7 @@
 通过 ``--scheme`` 在 MLP 去噪器与 PCA-UNet 两套方案之间切换。
 
 子命令：
+    prepare-airfoil-uiuc  将 UIUC 坐标预处理为翼型 SDF 数据集
     prepare-splits  生成固定的 train/test 划分 CSV
     train           训练自编码器与扩散模型（可分阶段）
     test            对已完成的 run 目录做评估与可视化
@@ -61,6 +62,22 @@ def cmd_prepare_splits(args: argparse.Namespace) -> None:
     from scripts.prepare_splits import prepare_splits
 
     prepare_splits(args.dataset, force=args.force)
+
+
+def cmd_prepare_airfoil_uiuc(args: argparse.Namespace) -> None:
+    """执行 prepare-airfoil-uiuc 子命令：写入 airfoil_uiuc_sdf processed 数据。"""
+    from scripts.prepare_airfoil_uiuc import prepare_airfoil_uiuc
+
+    summary = prepare_airfoil_uiuc(
+        raw_dir=args.raw_dir,
+        output_dir=args.output_dir,
+        height=args.height,
+        width=args.width,
+        n_resample=args.n_resample,
+        sdf_scale=args.sdf_scale,
+        force=args.force,
+    )
+    print(f"Prepared UIUC airfoils: {summary}")
 
 
 def cmd_train(args: argparse.Namespace) -> None:
@@ -120,6 +137,26 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     # --- 数据集划分 ---
+    airfoil = sub.add_parser("prepare-airfoil-uiuc", help="Create UIUC airfoil SDF dataset")
+    airfoil.add_argument(
+        "--raw-dir",
+        type=Path,
+        default=ROOT / "data" / "airfoil" / "raw" / "uiuc" / "coord_seligFmt",
+        help="Directory containing UIUC/Selig .dat files",
+    )
+    airfoil.add_argument(
+        "--output-dir",
+        type=Path,
+        default=ROOT / "data" / "airfoil_uiuc_sdf" / "processed",
+        help="Processed output directory",
+    )
+    airfoil.add_argument("--height", type=int, default=128)
+    airfoil.add_argument("--width", type=int, default=256)
+    airfoil.add_argument("--n-resample", type=int, default=257)
+    airfoil.add_argument("--sdf-scale", type=float, default=0.08)
+    airfoil.add_argument("--force", action="store_true", help="Overwrite existing NPZ samples")
+    airfoil.set_defaults(func=cmd_prepare_airfoil_uiuc)
+
     prep = sub.add_parser("prepare-splits", help="Create fixed train/test CSV under data/{dataset}/processed/")
     prep.add_argument("--dataset", required=True, help="Dataset name, e.g. single or F404")
     prep.add_argument("--force", action="store_true", help="Overwrite existing split files")

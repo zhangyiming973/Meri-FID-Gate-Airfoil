@@ -1,0 +1,19 @@
+{
+  "name": "airfoil_uiuc_sdf",
+  "processed_dir": "processed",
+  "index_file": "airfoil_index.csv",
+  "npz_dir": "airfoil_samples",
+  "param_table_path": "",
+  "condition_columns": [
+    "t_max",
+    "x_tmax",
+    "camber_max",
+    "x_camber_max",
+    "te_gap"
+  ],
+  "split": {
+    "test_size": 0.15,
+    "seed": 42,
+    "filter_passed_quality": true
+  }
+}

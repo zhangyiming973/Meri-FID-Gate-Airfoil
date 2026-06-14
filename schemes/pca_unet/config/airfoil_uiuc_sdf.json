@@ -1,0 +1,44 @@
+{
+  "dataset": "airfoil_uiuc_sdf",
+  "autoencoder": {
+    "in_channels": 1,
+    "latent_channels": 64,
+    "latent_spatial": [8, 16],
+    "input_size": [128, 256],
+    "epochs": 100,
+    "batch_size": 16,
+    "lr": 0.0003,
+    "use_semantic": false,
+    "loss_weights": {
+      "l1": 1.0,
+      "l2": 0.5,
+      "zero_level": 3.0,
+      "zero_sigma_mm": 1.0,
+      "dimension": 0.0,
+      "semantic": 0.0
+    }
+  },
+  "latent_gate": {
+    "max_recon_l1": 0.08,
+    "min_latent_std": 0.03,
+    "min_pass_ratio": 0.8
+  },
+  "unet": {
+    "pca_dim": 128,
+    "unet_base_ch": 64,
+    "timesteps": 200,
+    "epochs": 300,
+    "batch_size": 32,
+    "lr": 0.0003,
+    "cfg_dropout": 0.2,
+    "cfg_scale": 1.5,
+    "sample_steps": 50,
+    "use_ddim": true
+  },
+  "physics_guidance": {
+    "enabled": false,
+    "weight": 0.0
+  },
+  "device": "cuda",
+  "num_workers": 0
+}
