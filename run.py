@@ -9,6 +9,7 @@
     prepare-splits  生成固定的 train/test 划分 CSV
     train           训练自编码器与扩散模型（可分阶段）
     test            对已完成的 run 目录做评估与可视化
+    eval-airfoil-geometry  对翼型生成结果做几何清晰化与 rerank
 
 用法示例::
 
@@ -104,6 +105,36 @@ def cmd_test(args: argparse.Namespace) -> None:
         print(f"Timing report: {timing_path}")
 
 
+def cmd_eval_airfoil_geometry(args: argparse.Namespace) -> None:
+    """执行翼型几何校核、候选 rerank 和 `.dat` 导出。"""
+    import json
+
+    from scripts.airfoil.evaluate_generated_airfoils import evaluate
+
+    run_dir = Path(args.run_dir)
+    diff_run_dir = Path(args.diff_run_dir) if args.diff_run_dir else run_dir / "diffusion"
+    if args.ae_run_dir:
+        ae_run_dir = Path(args.ae_run_dir)
+    else:
+        ae_run_dir = run_dir / "autoencoder"
+        summary_path = diff_run_dir / "summary.json"
+        if not (ae_run_dir / "condition_stats.json").exists() and summary_path.exists():
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            if summary.get("ae_run_dir"):
+                ae_run_dir = Path(summary["ae_run_dir"])
+    out_dir = Path(args.out_dir) if args.out_dir else run_dir / "geometry_eval_rerank"
+    evaluate(
+        ae_run_dir=ae_run_dir,
+        diff_run_dir=diff_run_dir,
+        out_dir=out_dir,
+        n_points=args.n_points,
+        cfg_scale=args.cfg_scale,
+        sample_steps=args.sample_steps,
+        candidates_per_condition=args.candidates_per_condition,
+        export_top_k=args.export_top_k,
+    )
+
+
 def cmd_collect_timing(args: argparse.Namespace) -> None:
     """汇总 outputs/ 下各 run 的 timing.json，导出汇报用 CSV/JSON。"""
     from scripts.timing_utils import (
@@ -182,6 +213,19 @@ def main() -> None:
     test.add_argument("--scheme", required=True, choices=list(SCHEMES))
     test.add_argument("--run-dir", required=True, help="Run directory under outputs/{scheme}/{dataset}/{timestamp}/")
     test.set_defaults(func=cmd_test)
+
+    # --- 翼型几何校核 / rerank ---
+    geom = sub.add_parser("eval-airfoil-geometry", help="Evaluate generated airfoil geometry and export reranked .dat files")
+    geom.add_argument("--run-dir", required=True, help="Run directory under outputs/pca_unet/airfoil_uiuc_sdf/<timestamp>/")
+    geom.add_argument("--ae-run-dir", default=None, help="Override AE run directory")
+    geom.add_argument("--diff-run-dir", default=None, help="Override diffusion run directory")
+    geom.add_argument("--out-dir", default=None, help="Output directory, default: <run-dir>/geometry_eval_rerank")
+    geom.add_argument("--n-points", type=int, default=257)
+    geom.add_argument("--cfg-scale", type=float, default=1.5)
+    geom.add_argument("--sample-steps", type=int, default=50)
+    geom.add_argument("--candidates-per-condition", type=int, default=1)
+    geom.add_argument("--export-top-k", type=int, default=1)
+    geom.set_defaults(func=cmd_eval_airfoil_geometry)
 
     # --- 计时汇总 ---
     timing = sub.add_parser("collect-timing", help="Aggregate timing.json from all runs under outputs/")

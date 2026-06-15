@@ -77,11 +77,11 @@ def test_build_pca_unet_for_conditions_uses_condition_stats_columns() -> None:
 
 
 def test_build_diffusion_train_loader_from_fake_latent_records(tmp_path: Path) -> None:
-    records = [_record(i) for i in range(4)]
+    records = [_record(i) for i in range(20)]
     save_records(records, tmp_path / "body_latent_train.json")
     z_train_np = np.stack([r.z_m for r in records])
 
-    loader = build_diffusion_train_loader(records, z_train_np, pca_dim=3, batch_size=2)
+    loader = build_diffusion_train_loader(records, z_train_np, pca_dim=16, batch_size=2)
     z_batch, c_batch = next(iter(loader))
 
     assert z_batch.shape[0] == 2
