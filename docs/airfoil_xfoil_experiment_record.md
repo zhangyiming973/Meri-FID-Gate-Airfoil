@@ -300,12 +300,71 @@ rc08n1
    - XFOIL 作为第一道筛选
    - CFD 对 `goe188`, `m14`, `fx74cl6140`, `goe322` 等进一步验证
 
-## 10. 产物清单
+## 10. 可视化
+
+训练、测试和生成阶段已有可视化：
+
+```text
+outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/visualizations/
+  diff_training_dashboard.png
+  diff_training_curves.png
+  diff_metrics_test.png
+  diff_grid_test.png
+  test_generation_l1.png
+  test_ae_recon_l1.png
+  test_gen_vs_ae_recon.png
+  generations/
+```
+
+扩散阶段也保留了每个测试样本的生成 PNG：
+
+```text
+outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/diffusion/generations/
+```
+
+XFOIL 校核结果的可视化由以下脚本生成：
+
+```text
+scripts/airfoil/plot_xfoil_results.py
+```
+
+生成命令：
+
+```bash
+/home/vipuser/miniconda3/bin/python scripts/airfoil/plot_xfoil_results.py \
+  --xfoil-dir outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/xfoil_eval_top50_re1e6_m010_a-2_6 \
+  --top-k 10
+```
+
+XFOIL 可视化输出：
+
+```text
+outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/xfoil_eval_top50_re1e6_m010_a-2_6/visualizations/
+  visualization_index.md
+  xfoil_convergence_summary.png
+  xfoil_best_ld_distribution.png
+  xfoil_paired_metric_scatter.png
+  xfoil_top_generated_best_ld.png
+  xfoil_top_generated_polar_curves.png
+  xfoil_top_generated_airfoil_shapes.png
+```
+
+图表含义：
+
+- `xfoil_convergence_summary.png`：生成翼型与原始同名翼型的 XFOIL 收敛覆盖率。
+- `xfoil_best_ld_distribution.png`：两组翼型 best L/D 分布对比。
+- `xfoil_paired_metric_scatter.png`：同名配对的 best L/D 和 max CL 散点对比。
+- `xfoil_top_generated_best_ld.png`：生成翼型 best L/D 前 10。
+- `xfoil_top_generated_polar_curves.png`：生成翼型 top 样本的 CL/CD/L/D 随攻角变化曲线。
+- `xfoil_top_generated_airfoil_shapes.png`：送入 XFOIL 的 top 生成翼型清洗后几何形状。
+
+## 11. 产物清单
 
 代码：
 
 ```text
 scripts/airfoil/run_xfoil_batch.py
+scripts/airfoil/plot_xfoil_results.py
 ```
 
 XFOIL：
@@ -325,6 +384,7 @@ outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/xfoil_eval_top50_re1e6_m010_a-
   xfoil_summary.csv
   xfoil_paired_comparison.csv
   xfoil_conclusion_cn.md
+  visualizations/
   cases/
 ```
 
@@ -332,6 +392,7 @@ Git 提交：
 
 ```text
 9a6f5f8 Add batch XFOIL airfoil evaluation
+4155620 Document XFOIL airfoil evaluation
 ```
 
 本记录文件：
