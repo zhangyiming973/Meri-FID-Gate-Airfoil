@@ -99,6 +99,137 @@ def _contour_to_airfoil(
         return None
 
 
+def _interp_sdf_column(sdf: np.ndarray, grid_x: np.ndarray, x_value: float) -> np.ndarray:
+    """Interpolate an SDF vertical column at a physical x coordinate."""
+    x_axis = grid_x[0]
+    if x_value < x_axis[0] or x_value > x_axis[-1]:
+        return np.full(sdf.shape[0], np.nan, dtype=np.float64)
+    cols = np.arange(sdf.shape[1], dtype=np.float64)
+    col = float(np.interp(x_value, x_axis, cols))
+    left = int(np.floor(col))
+    right = min(left + 1, sdf.shape[1] - 1)
+    weight = col - left
+    return (1.0 - weight) * sdf[:, left] + weight * sdf[:, right]
+
+
+def _zero_crossings(y_axis: np.ndarray, values: np.ndarray) -> list[float]:
+    """Return y positions where an SDF column crosses zero."""
+    crossings: list[float] = []
+    finite = np.isfinite(values)
+    for i in range(len(values) - 1):
+        if not finite[i] or not finite[i + 1]:
+            continue
+        v0 = float(values[i])
+        v1 = float(values[i + 1])
+        if v0 == 0.0:
+            crossings.append(float(y_axis[i]))
+        if v0 * v1 < 0.0:
+            denom = abs(v0) + abs(v1)
+            t = abs(v0) / denom if denom > 0.0 else 0.5
+            crossings.append(float((1.0 - t) * y_axis[i] + t * y_axis[i + 1]))
+    if finite[-1] and float(values[-1]) == 0.0:
+        crossings.append(float(y_axis[-1]))
+    return sorted(crossings)
+
+
+def _surface_pair_from_sdf_column(y_axis: np.ndarray, values: np.ndarray) -> tuple[float, float] | None:
+    """Pick the main airfoil lower/upper zero crossings from one SDF column."""
+    crossings = _zero_crossings(y_axis, values)
+    if len(crossings) >= 2:
+        pairs = list(zip(crossings[0::2], crossings[1::2]))
+        if len(crossings) % 2 == 1:
+            pairs.append((crossings[0], crossings[-1]))
+        lower, upper = max(pairs, key=lambda p: p[1] - p[0])
+        if upper > lower:
+            return lower, upper
+
+    inside = np.where(np.isfinite(values) & (values <= 0.0))[0]
+    if len(inside) >= 2:
+        return float(y_axis[inside[0]]), float(y_axis[inside[-1]])
+    return None
+
+
+def _fill_nan_line(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    finite = np.isfinite(y)
+    if finite.sum() < 2:
+        raise ValueError("not enough finite samples")
+    return np.interp(x, x[finite], y[finite]).astype(np.float64)
+
+
+def _despike_line(y: np.ndarray, passes: int = 3, threshold: float = 6.0) -> np.ndarray:
+    """Replace isolated second-difference spikes with local linear estimates."""
+    arr = np.asarray(y, dtype=np.float64).copy()
+    for _ in range(max(0, passes)):
+        if len(arr) < 5:
+            break
+        d2 = arr[:-2] - 2.0 * arr[1:-1] + arr[2:]
+        med = float(np.median(d2))
+        mad = float(np.median(np.abs(d2 - med)))
+        scale = 1.4826 * mad
+        if scale < 1e-8:
+            scale = float(np.percentile(np.abs(d2 - med), 90))
+        if scale < 1e-8:
+            break
+        spike_idx = np.where(np.abs(d2 - med) > threshold * scale)[0] + 1
+        if len(spike_idx) == 0:
+            break
+        for idx in spike_idx:
+            if 0 < idx < len(arr) - 1:
+                arr[idx] = 0.5 * (arr[idx - 1] + arr[idx + 1])
+    return arr
+
+
+def _sample_sdf_airfoil(
+    sdf: np.ndarray,
+    grid_x: np.ndarray,
+    grid_y: np.ndarray,
+    contour: np.ndarray,
+    n_points: int = 257,
+) -> ResampledAirfoil:
+    """Sample upper/lower surfaces directly from SDF zero crossings.
+
+    The contour is used only to estimate the chordwise extent.  Surface points
+    are then taken from independent vertical SDF cuts, avoiding contour vertex
+    ordering jumps.
+    """
+    finite_contour = contour[np.isfinite(contour).all(axis=1)]
+    if len(finite_contour) < 8:
+        raise ValueError("contour has too few finite points")
+    x_min = float(np.percentile(finite_contour[:, 0], 0.5))
+    x_max = float(np.percentile(finite_contour[:, 0], 99.5))
+    chord = x_max - x_min
+    if chord <= 1e-6:
+        raise ValueError("sampled chord must be positive")
+
+    x_norm = cosine_x_grid(n_points)
+    x_phys = x_min + chord * x_norm
+    y_axis = grid_y[:, 0]
+    y_lower = np.full(n_points, np.nan, dtype=np.float64)
+    y_upper = np.full(n_points, np.nan, dtype=np.float64)
+    for i, xp in enumerate(x_phys):
+        pair = _surface_pair_from_sdf_column(y_axis, _interp_sdf_column(sdf, grid_x, float(xp)))
+        if pair is None:
+            continue
+        y_lower[i], y_upper[i] = pair
+
+    y_lower = _fill_nan_line(x_norm, y_lower)
+    y_upper = _fill_nan_line(x_norm, y_upper)
+    camber = 0.5 * (y_upper + y_lower)
+    thickness = y_upper - y_lower
+    camber = _despike_line(camber)
+    thickness = _despike_line(thickness)
+    thickness = np.maximum(thickness, 0.0)
+
+    leading_camber = float(camber[0])
+    trailing_camber = float(camber[-1])
+    chordline = leading_camber + (trailing_camber - leading_camber) * x_norm
+    camber = camber - chordline
+    y_upper_norm = camber / chord + 0.5 * thickness / chord
+    y_lower_norm = camber / chord - 0.5 * thickness / chord
+    y_upper_norm[0] = y_lower_norm[0] = 0.0
+    return ResampledAirfoil(x=x_norm, y_upper=y_upper_norm, y_lower=y_lower_norm)
+
+
 def _check_airfoil_validity(resampled: ResampledAirfoil) -> tuple[bool, list[str]]:
     """检查生成翼型的几何合法性。"""
     issues: list[str] = []
@@ -186,7 +317,10 @@ def _candidate_from_sdf(
     issues: list[str] = ["no_contour"]
     measured_cond: dict[str, float] = {}
     if contour is not None and len(contour) >= 10:
-        airfoil = _contour_to_airfoil(contour, n_points)
+        try:
+            airfoil = _sample_sdf_airfoil(sdf, grid_x, grid_y, contour, n_points)
+        except Exception:
+            airfoil = _contour_to_airfoil(contour, n_points)
         if airfoil is not None:
             is_valid, issues = _check_airfoil_validity(airfoil)
             measured_cond = compute_airfoil_conditions(airfoil)
@@ -219,6 +353,7 @@ def evaluate(
     sample_steps: int = 50,
     candidates_per_condition: int = 1,
     export_top_k: int = 0,
+    limit_samples: int | None = None,
 ) -> dict:
     """完整几何评估管线。"""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -243,6 +378,10 @@ def evaluate(
 
     # ── 加载测试数据 ──
     test_recs = load_records(ae_run_dir / "body_latent_test.json")
+    if limit_samples is not None:
+        test_recs = test_recs[: max(0, limit_samples)]
+    if not test_recs:
+        raise ValueError("No test records selected for geometry evaluation")
     z_test_np = np.stack([r.z_m for r in test_recs])
     codec = DiffusionLatentCodec.from_mode("pca_unet", pca, z_test_np.shape)
     schedule = DiffusionSchedule(timesteps=unet_cfg.get("timesteps", 200), device=device)
@@ -362,6 +501,7 @@ def evaluate(
         "sample_steps": sample_steps,
         "candidates_per_condition": candidates_per_condition,
         "export_top_k": export_top_k,
+        "limit_samples": limit_samples,
     }
 
     # ── 保存 ──
@@ -455,6 +595,7 @@ def main() -> None:
     parser.add_argument("--sample-steps", type=int, default=50, help="DDIM sampling steps")
     parser.add_argument("--candidates-per-condition", type=int, default=1, help="Number of candidates sampled per test condition")
     parser.add_argument("--export-top-k", type=int, default=0, help="Export top-k cleaned candidates as .dat files")
+    parser.add_argument("--limit-samples", type=int, help="Evaluate only the first N test samples")
     args = parser.parse_args()
     evaluate(
         Path(args.ae_run_dir),
@@ -465,6 +606,7 @@ def main() -> None:
         sample_steps=args.sample_steps,
         candidates_per_condition=args.candidates_per_condition,
         export_top_k=args.export_top_k,
+        limit_samples=args.limit_samples,
     )
 
 

@@ -886,3 +886,42 @@ z_m (64×16×16) → flatten → PCA 投影 → w (128 维) → 归一化
 > 指标随 run 变化，以各 run 下 `diffusion/summary.json` 为准。汇总耗时：`python run.py collect-timing`。
 
 
+## 翼型到三维机翼
+
+`scripts/generate_wing.py` 可将 Selig/UIUC 格式翼型坐标生成一侧梯形机翼。脚本采用 CadQuery 作为 OpenCascade 封装导出 STEP；未安装 CadQuery 时可用 `--no-step` 先输出几何参数 metadata。
+
+默认三翼型示例使用本地 UIUC/Selig 原始坐标库中的 `n0012`、`naca2412`、`s1223`。这些坐标比生成结果目录里的 `top_dat` 更适合 CAD loft；脚本还会先拆分上下表面并用 cosine 网格重采样，避免原始点列中的局部尖峰造成截面破损。图片反推轮廓可作为无坐标数据时的兜底，但需要尺度标定和轮廓数字化，不建议作为首选几何来源。
+
+参数约定：
+
+| 参数 | 说明 |
+| ---- | ---- |
+| `--root-tip-ratio` | 根梢比，定义为 `root_chord / tip_chord` |
+| `--taper-ratio` | 梢根比，定义为 `tip_chord / root_chord`，与 `--root-tip-ratio` 二选一 |
+| `--aspect-ratio` | 常规定义的全翼展弦比，`full_span^2 / full_area` |
+| `--total-length` | 单侧展长，上反角作用前的长度 |
+| `--dihedral` | 上反角，单位为度 |
+
+示例：对已选的三个生成翼型输出 metadata：
+
+```bash
+python scripts/generate_wing.py \
+  --example-three \
+  --root-tip-ratio 2.0 \
+  --aspect-ratio 8.0 \
+  --total-length 5.0 \
+  --dihedral 5.0 \
+  --no-step
+```
+
+安装 CadQuery 后导出 STEP：
+
+```bash
+python scripts/generate_wing.py \
+  --airfoil data/airfoil/raw/uiuc/coord_seligFmt/coord_seligFmt/naca2412.dat \
+  --root-tip-ratio 2.0 \
+  --aspect-ratio 8.0 \
+  --total-length 5.0 \
+  --dihedral 5.0 \
+  --output outputs/wing_3d_clean/naca2412_wing.step
+```
