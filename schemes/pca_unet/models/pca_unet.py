@@ -47,6 +47,9 @@ class PcaGridSpec:
                 if spatial % h != 0:
                     continue
                 w = spatial // h
+                # UNet 有 2 层 stride=2 下采样 → H/W 必须被 4 整除
+                if h % 4 != 0 or w % 4 != 0:
+                    continue
                 aspect = max(h, w) / max(min(h, w), 1)
                 score = aspect + abs(h - w) * 0.1
                 if score < best_score:

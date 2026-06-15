@@ -1,0 +1,19 @@
+{
+  "test_size": 10,
+  "seed": 42,
+  "filter_passed_quality": true,
+  "train_count": 140,
+  "test_count": 10,
+  "test_ids": [
+    "sample_074",
+    "sample_019",
+    "sample_119",
+    "sample_079",
+    "sample_077",
+    "sample_032",
+    "sample_065",
+    "sample_142",
+    "sample_069",
+    "sample_083"
+  ]
+}

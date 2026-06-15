@@ -1,0 +1,20 @@
+{
+  "name": "F404",
+  "processed_dir": "processed",
+  "index_file": "meridian_index.csv",
+  "npz_dir": "meridian_samples",
+  "param_table_path": "",
+  "condition_columns": [
+    "hub_r_end_mm",
+    "rim_r_start_mm",
+    "angle_web_deg",
+    "r_trans_bore_web_mm",
+    "z_min"
+  ],
+  "split": {
+    "test_size": 10,
+    "seed": 20260530,
+    "filter_passed_quality": false
+  },
+  "condition_specs_file": "condition_specs.jsonl"
+}

@@ -24,11 +24,11 @@
     "min_pass_ratio": 0.8
   },
   "unet": {
-    "pca_dim": 128,
-    "unet_base_ch": 64,
+    "pca_dim": 256,
+    "unet_base_ch": 384,
     "timesteps": 200,
     "epochs": 300,
-    "batch_size": 32,
+    "batch_size": 1024,
     "lr": 0.0003,
     "cfg_dropout": 0.2,
     "cfg_scale": 1.5,

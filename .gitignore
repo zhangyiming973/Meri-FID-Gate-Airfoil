@@ -1,23 +1,39 @@
-# Build and Release Folders
+# ── Build artifacts ──
 bin-debug/
 bin-release/
 [Oo]bj/
 [Bb]in/
-
-# Other files and folders
 .settings/
+__pycache__/
+*.pyc
 
-# Executables
+# ── Flash / mobile executables ──
 *.swf
 *.air
 *.ipa
 *.apk
 
-# Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
-# should NOT be excluded as they contain compiler settings and other important
-# information for Eclipse / Flash Builder.
+# ── Model weights (large binary) ──
+*.pt
+*.pth
 
-/data/
+# ── NPZ sample data (large, generated) ──
+*.npz
+
+# ── Large latent records ──
+body_latent_*.json
+
+# ── Outputs (all generated run artifacts) ──
 /outputs/
-__pycache__/
-*.pyc
+
+# ── Data: keep metadata, ignore heavy generated samples ──
+# Allow: dataset.json, *.csv, *.json (stats, splits, indices)
+# Block: meridian_samples/, airfoil_samples/ (NPZ directories)
+/data/*/processed/meridian_samples/
+/data/*/processed/airfoil_samples/
+/data/*/processed/*_sdf_samples/
+# Block raw PDF / CAD / FEM in data
+/data/*/raw/
+/data/*/results/
+/data/*/not_fem/
+/data/airfoil/raw/
