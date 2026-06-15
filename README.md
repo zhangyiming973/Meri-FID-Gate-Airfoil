@@ -1,4 +1,181 @@
-# Meridian SDF 尺寸引导潜空间扩散
+# Meri-FID-Gate-Airfoil
+
+本项目当前主线是 **UIUC/Selig 翼型 SDF 条件扩散生成、几何重建、XFOIL 气动校核与 CadQuery 三维机翼 STEP 生成**。仓库中仍保留早期 Meridian SDF 潜空间扩散框架，见本文后半部分。
+
+## 2026-06-15 翼型实验主线
+
+本轮实验完成了从翼型数据到工程校核的完整链路：
+
+1. 从 UIUC/Selig `.dat` 翼型库解析、归一化、重采样并栅格化为 SDF。
+2. 使用 `pca_unet` 两阶段模型训练：AE 学习 SDF latent，PCA-UNet 条件扩散生成翼型 SDF。
+3. 从已保存的生成 SDF 中提取光顺翼型坐标并导出 `.dat`。
+4. 对 32 个生成样本运行 XFOIL 气动校核，并生成 top 样本可视化。
+5. 对 XFOIL 排名前 5 的样本生成三维机翼 STEP。
+
+关键修正是 `SDF -> 翼型坐标` 的采样逻辑：不再依赖 `matplotlib.contour` 顶点顺序拆分上下表面，而是在固定 `x/c` 网格上沿 SDF 竖线直接寻找上下零交点。该路径减少了 raw generated 翼型中的跳变、尖峰和坑洼，使 XFOIL 与 CadQuery 后处理更加稳定。
+
+## 重要文档与产物位置
+
+完整实验总结：
+
+```text
+AIRFOIL_PIPELINE_EXPERIMENT_SUMMARY_20260615.md
+```
+
+关键实验、中间数据、可视化图像、STEP 文件位置索引：
+
+```text
+ARTIFACT_LOCATION_INDEX_20260615.md
+```
+
+本轮 SDF 采样修正实验日志：
+
+```text
+docs/airfoil_sdf_sampling_experiment_20260615.md
+```
+
+XFOIL 实验记录：
+
+```text
+docs/airfoil_xfoil_experiment_record.md
+```
+
+项目压缩归档：
+
+```text
+/home/vipuser/Meri-FID-Gate-Airfoil_20260615_full.zip
+```
+
+## Airfoil 核心模块
+
+| 模块 | 功能 |
+| ---- | ---- |
+| `scripts/airfoil_geometry.py` | Selig/UIUC 翼型解析、归一化、上下表面拆分、重采样、几何条件计算 |
+| `scripts/airfoil_sdf.py` | 翼型二维 SDF 与语义 mask 构建 |
+| `scripts/prepare_airfoil_uiuc.py` | UIUC 翼型库批量预处理，生成固定 train/test 划分 |
+| `scripts/airfoil/evaluate_generated_airfoils.py` | 生成 SDF 几何评估、SDF 直采、`.dat` 导出与候选重排 |
+| `scripts/airfoil/run_xfoil_batch.py` | XFOIL 批量校核 |
+| `scripts/airfoil/plot_xfoil_results.py` | XFOIL 结果可视化 |
+| `scripts/generate_wing.py` | CadQuery/OpenCascade 三维机翼 STEP 生成 |
+| `schemes/pca_unet/` | AE + PCA-UNet 条件扩散训练与生成 |
+
+## Airfoil 数据与输出
+
+预处理数据：
+
+```text
+data/airfoil_uiuc_sdf/processed/
+```
+
+本次 AE 输出：
+
+```text
+outputs/pca_unet/airfoil_uiuc_sdf/20260615_110639/autoencoder/
+```
+
+本次扩散生成输出：
+
+```text
+outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/diffusion/
+```
+
+生成样本 SDF 数值数据：
+
+```text
+outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/diffusion/generated_sdf_npz/
+```
+
+SDF 直采几何导出结果：
+
+```text
+outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/geometry_eval_generated_sdf_direct/
+```
+
+32 个样本 XFOIL 校核结果：
+
+```text
+outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/xfoil_eval_sdf_direct_top32_re1e6_m010_a-2_6/
+```
+
+XFOIL 可视化图：
+
+```text
+outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/xfoil_eval_sdf_direct_top32_re1e6_m010_a-2_6/visualizations/
+```
+
+Top 5 三维机翼 STEP：
+
+```text
+outputs/wing_3d_sdf_direct_top5/
+```
+
+## Airfoil 常用命令
+
+环境：
+
+```bash
+conda activate /home/vipuser/conda_envs/xfoil-build
+cd /home/vipuser/Meri-FID-Gate-Airfoil
+```
+
+预处理 UIUC 翼型数据：
+
+```bash
+python run.py prepare-airfoil-uiuc --force
+```
+
+训练 Airfoil AE：
+
+```bash
+python run.py train \
+  --scheme pca_unet \
+  --dataset airfoil_uiuc_sdf \
+  --stage ae
+```
+
+基于已有 AE 训练 PCA-UNet 扩散模型：
+
+```bash
+python run.py train \
+  --scheme pca_unet \
+  --dataset airfoil_uiuc_sdf \
+  --stage unet \
+  --ae-run-dir outputs/pca_unet/airfoil_uiuc_sdf/20260615_110639/autoencoder
+```
+
+从已保存的生成 SDF 导出光顺翼型 `.dat`：
+
+```bash
+python scripts/airfoil/evaluate_generated_airfoils.py \
+  --generated-dir outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/diffusion/generated_sdf_npz \
+  --output-dir outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/geometry_eval_generated_sdf_direct \
+  --sdf-source generated_sdf \
+  --sampling-method sdf-direct
+```
+
+运行 XFOIL 批量校核和可视化：
+
+```bash
+python scripts/airfoil/run_xfoil_batch.py \
+  --generated-dir outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/geometry_eval_generated_sdf_direct/top_dat \
+  --output-dir outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/xfoil_eval_sdf_direct_top32_re1e6_m010_a-2_6
+
+python scripts/airfoil/plot_xfoil_results.py \
+  --xfoil-dir outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/xfoil_eval_sdf_direct_top32_re1e6_m010_a-2_6
+```
+
+生成 Top 样本三维 STEP：
+
+```bash
+python scripts/generate_wing.py \
+  --input-dir outputs/pca_unet/airfoil_uiuc_sdf/20260615_114115/geometry_eval_generated_sdf_direct/top_dat \
+  --output-dir outputs/wing_3d_sdf_direct_top5 \
+  --limit 5
+```
+
+---
+
+# Legacy: Meridian SDF 尺寸引导潜空间扩散
 
 基于 `sdf2d` 子午面数据的**两阶段生成管线**：自编码器学习潜表示，再在潜空间上训练**尺寸条件扩散模型**。项目提供 **6 套独立方案**（`mlp` / `pca_unet` / `dim_guided` / `dim_unet` / `edm_guided` / `pidm_guided`），统一由 `run.py` 调度。
 
